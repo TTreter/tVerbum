@@ -210,6 +210,17 @@ EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
             bypass_cache=config.bypass_cache,
         )
 
+        # Captura da transcrição para reuso por ferramentas de imprensa e redes sociais (tNuntia)
+        raw_transcript_text: Optional[str] = None
+        if mode == "captions" and isinstance(content, str):
+            raw_transcript_text = content
+        elif meta.get("auxiliary_captions"):
+            raw_transcript_text = meta.get("auxiliary_captions")
+        else:
+            video_id = meta.get("video_id")
+            if video_id:
+                raw_transcript_text = VideoCache.get_transcript(video_id)
+
         # 2. Monta o prompt do sistema
         system_instruction = self._build_system_prompt(config)
 
@@ -365,6 +376,7 @@ EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
             body=processed_body,
             signatures=signatures_text,
             full_text=full_text,
+            raw_transcript=raw_transcript_text if config.include_raw_transcript else None,
             extracted_data=ai_payload.extracted_data,
             review_warnings=ai_payload.review_warnings,
             timeline_map=ai_payload.timeline_map,

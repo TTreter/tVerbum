@@ -176,6 +176,7 @@ MinuteExporter.to_docx(minute, "Ata_21_2026.docx")
 | `ingestion_mode` | `str` | `"auto"` | `"auto"`, `"youtube_direct"`, `"captions"` ou `"audio"` |
 | `known_attendees` | `list[str]` | `[]` | Lista nominal de presentes e partidos para ancorar a grafia |
 | `agenda_context` | `str \| None` | `None` | Pauta / Ordem do Dia / Ofícios para ancorar números de projetos |
+| `include_raw_transcript` | `bool` | `False` | Se `True`, inclui a transcrição integral no `MinuteOutput` para reuso externo (ex: tNuntia) |
 
 ---
 
@@ -184,12 +185,15 @@ MinuteExporter.to_docx(minute, "Ata_21_2026.docx")
 | Método | Rota | Descrição |
 | :--- | :--- | :--- |
 | `POST` | `/api/generate` | Gera a ata a partir do vídeo e retorna o JSON completo (`MinuteOutput`) |
+| `GET` | `/api/session/{minute_id}` | Recupera o `MinuteOutput` de uma sessão gerada anteriormente |
+| `GET` | `/api/transcription/{video_id}` | Obtém a transcrição e metadados diretamente do cache ou YouTube |
 | `POST` | `/api/validate-text` | Normaliza um texto editado manualmente (extenso, abreviações, parágrafo único) |
 | `POST` | `/api/refine-snippet` | Reescreve apenas um trecho selecionado com IA |
 | `POST` | `/api/export` | Exporta o JSON da ata (com edições do usuário) para `.pdf`, `.docx`, `.txt` ou `.md` |
 | `GET` | `/api/presets` | Lista os perfis institucionais cadastrados |
 | `POST` | `/api/presets` | Cria ou atualiza um perfil institucional |
 | `GET` | `/tverbum-editor.js` | Entrega o Web Component `<tverbum-editor>` standalone |
+| `DELETE`| `/api/cache` | Limpa o cache SQLite local |
 
 ---
 

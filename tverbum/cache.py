@@ -2,6 +2,7 @@
 Sistema de Cache Local em SQLite para o tVerbum.
 Evita re-extrair legendas e metadados do YouTube quando o mesmo vídeo é processado novamente
 com diferentes parâmetros de formatação.
+Permite compartilhamento entre tVerbum e módulos externos (como tNuntia) via TVERBUM_CACHE_PATH / TVERBUM_CACHE_DIR.
 """
 
 import os
@@ -12,7 +13,17 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-CACHE_DB_PATH = Path(tempfile.gettempdir()) / "tverbum_video_cache.db"
+
+def get_cache_db_path() -> Path:
+    """Determina o caminho do banco SQLite de cache a partir do ambiente ou do padrão temporário."""
+    if os.getenv("TVERBUM_CACHE_PATH"):
+        return Path(os.getenv("TVERBUM_CACHE_PATH"))
+    if os.getenv("TVERBUM_CACHE_DIR"):
+        return Path(os.getenv("TVERBUM_CACHE_DIR")) / "tverbum_video_cache.db"
+    return Path(tempfile.gettempdir()) / "tverbum_video_cache.db"
+
+
+CACHE_DB_PATH = get_cache_db_path()
 
 
 class VideoCache:
@@ -20,7 +31,9 @@ class VideoCache:
 
     @classmethod
     def _get_conn(cls) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(CACHE_DB_PATH))
+        db_path = get_cache_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(db_path))
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS video_cache (
@@ -53,6 +66,14 @@ class VideoCache:
                 }
         except Exception:
             return None
+
+    @classmethod
+    def get_transcript(cls, video_id: str, max_age_seconds: int = 86400 * 7) -> Optional[str]:
+        """Atalho para recuperar apenas o texto da transcrição em cache para o video_id."""
+        cached = cls.get(video_id, max_age_seconds=max_age_seconds)
+        if cached:
+            return cached.get("transcript")
+        return None
 
     @classmethod
     def set(cls, video_id: str, transcript: Optional[str], metadata: Dict[str, Any]) -> None:

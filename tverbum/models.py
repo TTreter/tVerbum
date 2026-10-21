@@ -68,6 +68,9 @@ class TimelineEntry(BaseModel):
     phase: str = Field(..., description="Fase da sessão ou nome do orador (ex: 'Pequeno Expediente - Ver. Marcos Santos')")
     timestamp: str = Field(..., description="Tempo no vídeo no formato HH:MM:SS ou MM:SS")
     summary: str = Field(..., description="Resumo curto do que ocorreu neste momento")
+    speaker: Optional[str] = Field(default="", description="Nome do orador ou participante da fala")
+    end_timestamp: Optional[str] = Field(default="", description="Timestamp aproximado de término (HH:MM:SS ou MM:SS)")
+    category: Optional[str] = Field(default="", description="Categoria temática (ex: 'Pequeno Expediente', 'Ordem do Dia', 'Votação', 'Explicações Pessoais')")
 
 
 class ExtractedSessionData(BaseModel):
@@ -195,6 +198,10 @@ class MinuteConfig(BaseModel):
         default=False,
         description="Se True, ignora o cache local SQLite e força nova consulta ao YouTube",
     )
+    include_raw_transcript: bool = Field(
+        default=False,
+        description="Se True, inclui a transcrição integral no MinuteOutput para reuso por ferramentas de imprensa e redes sociais",
+    )
 
     # --- Estrutura Documental ---
     include_header: bool = Field(
@@ -246,6 +253,10 @@ class MinuteOutput(BaseModel):
     body: str = Field(description="Texto principal do corpo da ata (pronto para revisão e banco de dados)")
     signatures: Optional[str] = Field(default=None, description="Bloco de assinaturas")
     full_text: str = Field(description="Texto consolidado completo (cabeçalho + corpo + assinaturas)")
+    raw_transcript: Optional[str] = Field(
+        default=None,
+        description="Transcrição completa e cronológica da sessão extraída do YouTube",
+    )
 
     # --- Dados Estruturados para Integração com Sistemas Externos ---
     extracted_data: ExtractedSessionData = Field(
