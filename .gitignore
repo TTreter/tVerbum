@@ -1,0 +1,32 @@
+# Variáveis de ambiente, presets locais e segredos (NUNCA versionar)
+.env
+.env.*
+!.env.example
+tverbum/presets_data.json
+presets_data.json
+
+# Documentos de rascunho/planejamento interno e testes locais
+PLANEJAMENTO.md
+MELHORIAS_FUTURAS.md
+tests/
+.pytest_cache/
+
+# Cache Python e artefatos de build
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Bancos de dados temporários, mídias e exportações locais
+*.db
+*.sqlite
+downloads/
+temp_audio/
+*.docx
+*.pdf
+.DS_Store
+Thumbs.db
