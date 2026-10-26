@@ -1,13 +1,14 @@
 """
-Sistema de Cache Local em SQLite para o tVerbum.
-Evita re-extrair legendas e metadados do YouTube quando o mesmo vídeo é processado novamente
-com diferentes parâmetros de formatação.
+Sistema de Cache Local em SQLite para o tVerbum (v2.0).
+Evita re-extrair legendas e metadados do YouTube e armazena atas consolidadas por hash de configuração
+para evitar chamadas duplicadas a LLMs gratuitos.
 Permite compartilhamento entre tVerbum e módulos externos (como tNuntia) via TVERBUM_CACHE_PATH / TVERBUM_CACHE_DIR.
 """
 
 import os
 import json
 import time
+import hashlib
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -27,7 +28,7 @@ CACHE_DB_PATH = get_cache_db_path()
 
 
 class VideoCache:
-    """Cache persistente leve baseado em SQLite nativo."""
+    """Cache persistente leve baseado em SQLite nativo para vídeos, transcrições e atas consolidadas."""
 
     @classmethod
     def _get_conn(cls) -> sqlite3.Connection:
@@ -40,6 +41,15 @@ class VideoCache:
                 video_id TEXT PRIMARY KEY,
                 transcript TEXT,
                 metadata_json TEXT,
+                updated_at REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS minute_cache (
+                cache_key TEXT PRIMARY KEY,
+                minute_json TEXT,
                 updated_at REAL
             )
             """
@@ -98,11 +108,68 @@ class VideoCache:
             pass
 
     @classmethod
+    def build_config_cache_key(cls, config: Any) -> str:
+        """Gera um hash SHA-256 estável dos parâmetros da ata para reuso de cache sem gastar tokens."""
+        raw_key = (
+            f"{getattr(config, 'video_url', '')}|"
+            f"{getattr(config, 'session_number', '')}|"
+            f"{getattr(config, 'preset_id', '')}|"
+            f"{getattr(config, 'detail_level', '')}|"
+            f"{getattr(config, 'single_paragraph', True)}|"
+            f"{getattr(config, 'paragraph_count', 1)}|"
+            f"{getattr(config, 'numbers_in_words', True)}|"
+            f"{getattr(config, 'allow_abbreviations', False)}|"
+            f"{getattr(config, 'ai_provider', 'auto')}|"
+            f"{getattr(config, 'agenda_context', '')}|"
+            f"{getattr(config, 'custom_instructions', '')}"
+        )
+        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def get_minute(cls, cache_key: str, max_age_seconds: int = 86400 * 3) -> Optional[Dict[str, Any]]:
+        """Recupera uma ata previamente gerada com as mesmas configurações."""
+        try:
+            with cls._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT minute_json, updated_at FROM minute_cache WHERE cache_key = ?",
+                    (cache_key,),
+                ).fetchone()
+                if not row:
+                    return None
+                minute_json, updated_at = row
+                if time.time() - updated_at > max_age_seconds:
+                    return None
+                return json.loads(minute_json) if minute_json else None
+        except Exception:
+            return None
+
+    @classmethod
+    def set_minute(cls, cache_key: str, minute_data: Dict[str, Any]) -> None:
+        """Salva a ata gerada no cache SQLite para evitar novas chamadas à IA."""
+        try:
+            with cls._get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO minute_cache (cache_key, minute_json, updated_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        cache_key,
+                        json.dumps(minute_data, ensure_ascii=False),
+                        time.time(),
+                    ),
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    @classmethod
     def clear(cls) -> None:
-        """Limpa todo o cache de vídeos."""
+        """Limpa todo o cache de vídeos e atas."""
         try:
             with cls._get_conn() as conn:
                 conn.execute("DELETE FROM video_cache")
+                conn.execute("DELETE FROM minute_cache")
                 conn.commit()
         except Exception:
             pass

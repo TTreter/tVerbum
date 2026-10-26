@@ -26,6 +26,7 @@ from .normalizer import TextNormalizer
 from .exporter import MinuteExporter
 from .presets import PresetManager
 from .cache import VideoCache
+from .limiter import RateLimiter
 
 app = FastAPI(
     title="tVerbum API",
@@ -184,6 +185,32 @@ async def get_session_by_id(minute_id: str):
     return minute
 
 
+@app.get("/api/providers")
+async def get_providers_status(test: bool = False):
+    """
+    Retorna a lista de provedores suportados (Gemini, Groq, OpenRouter, Ollama),
+    o status de disponibilidade de cada um e o resultado de diagnóstico de latência opcional.
+    """
+    from .providers import ProviderRouter
+    router = ProviderRouter()
+    status = router.list_available_providers()
+    primary = router.primary_provider
+
+    results: Dict[str, Any] = {
+        "primary_provider": primary,
+        "providers": status,
+    }
+    if test:
+        test_results = {}
+        for name, is_avail in status.items():
+            if is_avail:
+                test_results[name] = router.test_provider(name)
+            else:
+                test_results[name] = {"provider": name, "success": False, "error": "Credenciais não configuradas"}
+        results["diagnostics"] = test_results
+    return results
+
+
 @app.post("/api/generate", response_model=MinuteOutput)
 async def generate_minute_endpoint(config: MinuteConfig):
     """
@@ -192,13 +219,32 @@ async def generate_minute_endpoint(config: MinuteConfig):
     - `extracted_data`: data ISO, horários, presentes, matérias votadas (pronto para banco de dados)
     - `review_warnings`: termos sugeridos para conferência rápida
     - `timeline_map`: timestamps clicáveis da sessão no YouTube
+    Inclui controle de taxa com backoff exponencial e reutilização de cache SQLite.
     """
     global _LATEST_MINUTE_ID
     try:
-        generator = MinuteGenerator()
-        output = generator.generate(config)
+        # 1. Verifica cache local de atas idênticas para evitar consumo desnecessário de cotas gratuitas
+        cache_key = VideoCache.build_config_cache_key(config)
+        if not config.bypass_cache:
+            cached_minute_dict = VideoCache.get_minute(cache_key)
+            if cached_minute_dict:
+                cached_minute = MinuteOutput(**cached_minute_dict)
+                cached_minute.metadata["cache_hit"] = True
+                _MINUTES_STORE[cached_minute.id] = cached_minute
+                _LATEST_MINUTE_ID = cached_minute.id
+                return cached_minute
+
+        # 2. Executa geração protegida por controle de taxa (RateLimiter)
+        generator = MinuteGenerator(provider=config.ai_provider)
+        output = RateLimiter.execute_with_backoff(
+            func=lambda: generator.generate(config),
+            provider=config.ai_provider or "auto",
+        )
         _MINUTES_STORE[output.id] = output
         _LATEST_MINUTE_ID = output.id
+
+        # 3. Salva no cache SQLite para consultas futuras
+        VideoCache.set_minute(cache_key, output.model_dump())
         return output
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -232,11 +278,14 @@ async def validate_and_normalize_text(request: ValidateTextRequest):
 async def refine_snippet_endpoint(request: RefineSnippetRequest):
     """
     Reescreve rapidamente apenas uma frase ou trecho selecionado pelo usuário durante a revisão,
-    sem precisar regerar a ata inteira.
+    sem precisar regerar a ata inteira, protegido por controle de taxa.
     """
     try:
-        generator = MinuteGenerator()
-        return generator.refine_snippet(request)
+        generator = MinuteGenerator(provider=getattr(request, "ai_provider", "auto"))
+        return RateLimiter.execute_with_backoff(
+            func=lambda: generator.refine_snippet(request),
+            provider=getattr(request, "ai_provider", "auto") or "auto",
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
