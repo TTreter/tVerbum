@@ -165,6 +165,70 @@ class TVerbumEditor extends HTMLElement {
     }
   }
 
+  async quickLearnSelectedName() {
+    this._syncFromDOM();
+    const sel = this.shadowRoot.getSelection
+      ? this.shadowRoot.getSelection()
+      : window.getSelection();
+    let wrongText = sel ? sel.toString().trim() : '';
+
+    if (!wrongText) {
+      wrongText = prompt('Digite o nome que saiu com a grafia ERRADA no texto (ou deixe em branco para apenas cadastrar um nome novo):', '');
+      if (wrongText === null) return;
+      wrongText = wrongText.trim();
+    }
+
+    const correctName = prompt(
+      wrongText
+        ? `Qual é a grafia OFICIAL correta para substituir "${wrongText}"?`
+        : 'Digite a grafia OFICIAL correta do nome para adicionar à Biblioteca:',
+      wrongText
+    );
+    if (!correctName || !correctName.trim()) return;
+    const cleanCorrect = correctName.trim();
+
+    try {
+      const res = await fetch(`${this.apiBase}/api/names/quick-learn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wrong_text: wrongText,
+          correct_name: cleanCorrect,
+          category: 'parlamentar',
+        }),
+      });
+      if (!res.ok) throw new Error('Falha ao salvar nome na Biblioteca');
+
+      // Se havia texto errado e ata aberta, substitui todas as ocorrências imediatamente
+      if (wrongText && this._minute) {
+        const bodyEl = this.shadowRoot.getElementById('tv-body');
+        if (bodyEl && bodyEl.innerText.includes(wrongText)) {
+          bodyEl.innerText = bodyEl.innerText.split(wrongText).join(cleanCorrect);
+        }
+        this._syncFromDOM();
+        // Chama validateAndNormalize para aplicar em todo o texto com as regras atualizadas
+        await this.validateAndNormalize();
+      }
+
+      const msgBox = this.shadowRoot.getElementById('tv-toast');
+      if (msgBox) {
+        msgBox.innerText = wrongText
+          ? `✅ Aprendido na Biblioteca: "${wrongText}" → "${cleanCorrect}". Todas as ocorrências foram corrigidas!`
+          : `✅ Nome oficial "${cleanCorrect}" salvo na Biblioteca de Nomes!`;
+        msgBox.style.display = 'block';
+        setTimeout(() => { msgBox.style.display = 'none'; }, 5500);
+      }
+
+      this.dispatchEvent(new CustomEvent('tverbum-name-learned', {
+        detail: { wrongText, correctName: cleanCorrect },
+        bubbles: true,
+        composed: true,
+      }));
+    } catch (e) {
+      alert('Erro ao salvar na Biblioteca de Nomes: ' + e.message);
+    }
+  }
+
   _toggleHighlights() {
     if (!this._minute) return;
     this._syncFromDOM();
@@ -536,6 +600,9 @@ class TVerbumEditor extends HTMLElement {
           <button type="button" class="tv-btn tv-btn-amber" id="btn-refine" title="Selecione uma frase no texto e clique para reescrever com IA">
             ✨ Reescrever Seleção com IA
           </button>
+          <button type="button" class="tv-btn tv-btn-amber" id="btn-learn-name" title="Selecione um nome grafado errado no texto para corrigi-lo e ensiná-lo permanentemente à Biblioteca">
+            👤 Ensinar Nome
+          </button>
           <button type="button" class="tv-btn tv-btn-amber" id="btn-warnings" style="display:none;">
             ⚠️ Destacar Revisão
           </button>
@@ -594,6 +661,7 @@ class TVerbumEditor extends HTMLElement {
       );
       if (instruction) this.refineSelectedSnippet(instruction);
     });
+    this.shadowRoot.getElementById('btn-learn-name').addEventListener('click', () => this.quickLearnSelectedName());
     this.shadowRoot.getElementById('btn-warnings').addEventListener('click', () => this._toggleHighlights());
 
     const saveBtn = this.shadowRoot.getElementById('btn-save-host');
