@@ -1,13 +1,15 @@
 """
-Motor de Inteligência Artificial para geração, extração estruturada e refinamento de atas (tVerbum v1.2).
-Utiliza Structured Outputs do Google Gemini para devolver simultaneamente o texto formal da ata,
-os metadados para banco de dados, alertas de revisão humana e o mapa de timestamps.
+Motor de Inteligência Artificial para geração, extração estruturada e refinamento de atas (tVerbum v2.0).
+Suporta múltiplos provedores com failover automático: Google Gemini, Groq, OpenRouter e Ollama Local.
+Devolve simultaneamente o texto formal da ata, os metadados para banco de dados, alertas de revisão humana
+e o mapa cronológico de timestamps.
 """
 
 import os
 import json
 import time
 import uuid
+import logging
 from typing import Optional, List, Any, Tuple
 from dotenv import load_dotenv
 from google import genai
@@ -26,12 +28,15 @@ from .models import (
 from .ingest import ContentIngestor
 from .normalizer import TextNormalizer
 from .presets import PresetManager
+from .cache import VideoCache
+from .providers import ProviderRouter, BaseLLMProvider
 
 load_dotenv()
+logger = logging.getLogger("tverbum.ai_engine")
 
 
 class MinuteGenerator:
-    """Gerador inteligente de atas formais utilizando Google Gemini."""
+    """Gerador inteligente de atas formais com arquitetura multi-provedor e fallback resiliente."""
 
     FALLBACK_MODELS = [
         "gemini-3.8-flash",
@@ -41,15 +46,36 @@ class MinuteGenerator:
         "gemini-3.1-flash-lite",
     ]
 
-    def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+        provider: Optional[str] = None,
+    ):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
-        if not self.api_key:
-            raise ValueError(
-                "Chave de API do Gemini não encontrada. Defina a variável GEMINI_API_KEY no arquivo .env "
-                "ou passe diretamente para o gerador."
-            )
         self.model_name = model_name or os.getenv("DEFAULT_MODEL", "gemini-3.8-flash")
-        self.client = genai.Client(api_key=self.api_key)
+        self.provider = (provider or os.getenv("AI_PROVIDER", "auto")).lower()
+        self.router = ProviderRouter(primary_provider=self.provider)
+
+        # Atualiza a chave de API no provedor Gemini se informada
+        if self.api_key and "gemini" in self.router.providers:
+            self.router.providers["gemini"].api_key = self.api_key
+
+        # Instancia cliente Gemini se houver chave (para compatibilidade com upload de mídia)
+        self.client: Optional[genai.Client] = None
+        if self.api_key:
+            try:
+                self.client = genai.Client(api_key=self.api_key)
+            except Exception:
+                pass
+
+        # Valida se ao menos um provedor de IA está configurado e disponível
+        available = self.router.list_available_providers()
+        if not any(available.values()):
+            raise ValueError(
+                "Nenhum provedor de IA disponível. Configure ao menos uma variável de ambiente: "
+                "GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY ou inicie o Ollama localmente."
+            )
 
     def _build_system_prompt(self, config: MinuteConfig) -> str:
         """Monta as instruções do sistema calibradas com base no padrão legislativo brasileiro."""
@@ -133,6 +159,9 @@ EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
 
     def _wait_for_file_active(self, uploaded_file: Any, timeout_seconds: int = 180) -> Any:
         """Aguarda até que um arquivo de áudio/vídeo enviado à Gemini File API fique no estado ACTIVE."""
+        if not self.client:
+            return uploaded_file
+
         start = time.time()
         file_name = getattr(uploaded_file, "name", None)
         if not file_name:
@@ -150,53 +179,10 @@ EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
 
         return uploaded_file
 
-    def _generate_structured_with_fallback(
-        self, contents: List[Any], system_instruction: str
-    ) -> Tuple[AIGeneratedPayload, str]:
-        """Executa generate_content com Structured JSON Schema e fallback automático de modelos."""
-        models_to_try = [self.model_name] + [m for m in self.FALLBACK_MODELS if m != self.model_name]
-        last_error: Optional[Exception] = None
-
-        for model in models_to_try:
-            try:
-                response = self.client.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        temperature=0.2,
-                        response_mime_type="application/json",
-                        response_schema=AIGeneratedPayload,
-                    ),
-                )
-                raw_text = (response.text or "").strip()
-                parsed = self._parse_ai_payload(raw_text)
-                return (parsed, model)
-            except Exception as e:
-                last_error = e
-                err_str = str(e)
-                if any(code in err_str for code in ("503", "429", "UNAVAILABLE", "404", "NOT_FOUND")):
-                    continue
-                raise e
-
-        raise RuntimeError(f"Falha ao gerar conteúdo após tentar múltiplos modelos Gemini: {last_error}")
-
     @staticmethod
     def _parse_ai_payload(raw_text: str) -> AIGeneratedPayload:
-        """Converte o JSON retornado pelo Gemini em AIGeneratedPayload com fallback seguro."""
-        cleaned = raw_text.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.strip("`")
-            if cleaned.startswith("json"):
-                cleaned = cleaned[4:].strip()
-        try:
-            data = json.loads(cleaned)
-            if isinstance(data, dict) and "body" in data:
-                return AIGeneratedPayload(**data)
-        except Exception:
-            pass
-        # Fallback caso o modelo retorne texto puro
-        return AIGeneratedPayload(body=raw_text)
+        """Converte o texto retornado pela IA em AIGeneratedPayload com máxima tolerância a falhas."""
+        return BaseLLMProvider.parse_ai_payload(raw_text)
 
     def generate(self, config: MinuteConfig) -> MinuteOutput:
         """Executa o pipeline completo de geração da ata e extração de metadados estruturados."""
@@ -271,41 +257,91 @@ EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
         uploaded_file = None
         ai_payload = AIGeneratedPayload(body="")
         used_model = self.model_name
+        used_provider = getattr(config, "ai_provider", "auto") or "auto"
+        target_model = getattr(config, "ai_model", None)
 
         try:
+            # Caso 1: Transcrição textual (modo mais frugal e compatível com 100% dos modelos gratuitos)
             if mode == "captions":
                 user_content = [f"{user_prompt_header}\nTRANSCRIÇÃO DA SESSÃO:\n{content}"]
-                ai_payload, used_model = self._generate_structured_with_fallback(user_content, system_instruction)
+                ai_payload, used_provider, used_model = self.router.generate_structured(
+                    contents=user_content,
+                    system_instruction=system_instruction,
+                    user_prompt_header="",
+                    preferred_provider=used_provider,
+                    model_name=target_model or self.model_name,
+                )
 
+            # Caso 2: URL direta do YouTube (multimodal Gemini)
             elif mode == "youtube_direct":
-                yt_part = types.Part.from_uri(file_uri=content, mime_type="video/mp4")
-                aux_captions = meta.get("auxiliary_captions", "")
-                prompt_parts: List[Any] = [yt_part, user_prompt_header]
-                if aux_captions:
-                    prompt_parts.append(f"\nTRANSCRIÇÃO AUXILIAR DE APOIO:\n{aux_captions[:50000]}")
-                try:
-                    ai_payload, used_model = self._generate_structured_with_fallback(prompt_parts, system_instruction)
-                except Exception:
-                    audio_path = ContentIngestor.download_audio_stream(content)
-                    if not audio_path:
-                        raise
-                    mode = "audio"
-                    content = audio_path
-                    meta["method"] = "audio_download_fallback"
+                # Se o provedor não for Gemini ou Gemini não estiver disponível, tenta obter transcrição
+                if used_provider not in ("auto", "gemini") or not self.client:
+                    aux_captions = meta.get("auxiliary_captions") or (
+                        VideoCache.get_transcript(meta.get("video_id", ""))
+                    )
+                    if aux_captions:
+                        user_content = [f"{user_prompt_header}\nTRANSCRIÇÃO DA SESSÃO:\n{aux_captions}"]
+                        ai_payload, used_provider, used_model = self.router.generate_structured(
+                            contents=user_content,
+                            system_instruction=system_instruction,
+                            preferred_provider=used_provider,
+                            model_name=target_model,
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"O provedor '{used_provider}' requer transcrição de áudio/texto e não suporta vídeo multimodal direto."
+                        )
+                else:
+                    yt_part = types.Part.from_uri(file_uri=content, mime_type="video/mp4")
+                    aux_captions = meta.get("auxiliary_captions", "")
+                    prompt_parts: List[Any] = [yt_part, user_prompt_header]
+                    if aux_captions:
+                        prompt_parts.append(f"\nTRANSCRIÇÃO AUXILIAR DE APOIO:\n{aux_captions[:50000]}")
+                    try:
+                        ai_payload, used_provider, used_model = self.router.generate_structured(
+                            contents=prompt_parts,
+                            system_instruction=system_instruction,
+                            preferred_provider="gemini",
+                            model_name=target_model or self.model_name,
+                        )
+                    except Exception as yt_err:
+                        # Fallback de áudio se YouTube Direct multimodal falhar
+                        logger.warning(f"YouTube Direct falhou no Gemini ({yt_err}). Tentando áudio...")
+                        audio_path = ContentIngestor.download_audio_stream(content)
+                        if not audio_path:
+                            raise
+                        mode = "audio"
+                        content = audio_path
+                        meta["method"] = "audio_download_fallback"
+                        if self.client:
+                            uploaded_file = self.client.files.upload(file=content)
+                            uploaded_file = self._wait_for_file_active(uploaded_file)
+                            ai_payload, used_provider, used_model = self.router.generate_structured(
+                                contents=[user_prompt_header, uploaded_file],
+                                system_instruction=system_instruction,
+                                preferred_provider="gemini",
+                                model_name=target_model or self.model_name,
+                            )
+                        else:
+                            raise yt_err
+
+            # Caso 3: Arquivo de áudio local
+            else:
+                if self.client and used_provider in ("auto", "gemini"):
                     uploaded_file = self.client.files.upload(file=content)
                     uploaded_file = self._wait_for_file_active(uploaded_file)
-                    ai_payload, used_model = self._generate_structured_with_fallback(
-                        [user_prompt_header, uploaded_file], system_instruction
+                    user_content = [user_prompt_header, uploaded_file]
+                    ai_payload, used_provider, used_model = self.router.generate_structured(
+                        contents=user_content,
+                        system_instruction=system_instruction,
+                        preferred_provider="gemini",
+                        model_name=target_model or self.model_name,
                     )
-
-            else:
-                uploaded_file = self.client.files.upload(file=content)
-                uploaded_file = self._wait_for_file_active(uploaded_file)
-                user_content = [user_prompt_header, uploaded_file]
-                ai_payload, used_model = self._generate_structured_with_fallback(user_content, system_instruction)
+                else:
+                    raise RuntimeError("Upload de arquivos brutos de áudio é restrito ao provedor Gemini.")
 
         finally:
-            if uploaded_file and hasattr(uploaded_file, "name"):
+            if uploaded_file and hasattr(uploaded_file, "name") and self.client:
                 try:
                     self.client.files.delete(name=uploaded_file.name)
                 except Exception:
@@ -362,6 +398,7 @@ EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
         meta["word_count"] = len(processed_body.split())
         meta["character_count"] = len(processed_body)
         meta["paragraph_count"] = len([p for p in processed_body.split("\n\n") if p.strip()])
+        meta["provider_used"] = used_provider
         meta["model_used"] = used_model
         meta["post_processing_corrections"] = corrections
 
@@ -385,34 +422,15 @@ EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
 
     def refine_snippet(self, request: RefineSnippetRequest) -> RefineSnippetResponse:
         """Reescreve ou refina rapidamente apenas um trecho selecionado da ata."""
-        system_instruction = (
-            "Você é um redator legislativo e cartorial sênior. Reescreva APENAS o trecho fornecido pelo usuário "
-            "seguindo a instrução solicitada, mantendo tom estritamente impessoal, em terceira pessoa e formal. "
-            "Retorne exclusivamente o trecho reescrito, sem aspas e sem comentários adicionais."
-        )
-        prompt = (
-            f"INSTRUÇÃO DE REESCRITA: {request.instruction}\n\n"
-            f"TRECHO ORIGINAL:\n{request.snippet}"
-        )
+        provider_preference = getattr(request, "ai_provider", "auto") or "auto"
+        model_preference = getattr(request, "ai_model", None)
 
-        models_to_try = [self.model_name] + [m for m in self.FALLBACK_MODELS if m != self.model_name]
-        refined_raw = request.snippet
-        for model in models_to_try:
-            try:
-                res = self.client.models.generate_content(
-                    model=model,
-                    contents=[prompt],
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        temperature=0.25,
-                    ),
-                )
-                refined_raw = (res.text or request.snippet).strip()
-                break
-            except Exception as e:
-                if any(code in str(e) for code in ("503", "429", "UNAVAILABLE", "404")):
-                    continue
-                raise e
+        refined_raw, used_provider, used_model = self.router.refine_snippet(
+            snippet=request.snippet,
+            instruction=request.instruction,
+            preferred_provider=provider_preference,
+            model_name=model_preference,
+        )
 
         normalized_snippet, _ = TextNormalizer.validate_and_normalize(
             text=refined_raw,

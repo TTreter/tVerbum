@@ -202,6 +202,14 @@ class MinuteConfig(BaseModel):
         default=False,
         description="Se True, inclui a transcrição integral no MinuteOutput para reuso por ferramentas de imprensa e redes sociais",
     )
+    ai_provider: Optional[str] = Field(
+        default="auto",
+        description="Provedor de IA a ser utilizado ('gemini', 'groq', 'openrouter', 'ollama') ou 'auto' para roteamento inteligente",
+    )
+    ai_model: Optional[str] = Field(
+        default=None,
+        description="Nome específico do modelo no provedor (opcional)",
+    )
 
     # --- Estrutura Documental ---
     include_header: bool = Field(
@@ -318,6 +326,8 @@ class RefineSnippetRequest(BaseModel):
     )
     numbers_in_words: bool = Field(default=True)
     allow_abbreviations: bool = Field(default=False)
+    ai_provider: Optional[str] = Field(default="auto", description="Provedor de IA ('gemini', 'groq', 'openrouter', 'ollama', 'auto')")
+    ai_model: Optional[str] = Field(default=None, description="Modelo específico a ser utilizado")
 
 
 class RefineSnippetResponse(BaseModel):
