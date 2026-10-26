@@ -6,7 +6,7 @@ Inclui endpoints de validação pós-edição, reescrita de trecho com IA e entr
 import uuid
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, Response
@@ -16,6 +16,8 @@ from .models import (
     MinuteOutput,
     ExportRequest,
     OrganizationPreset,
+    NameEntry,
+    QuickLearnNameRequest,
     ValidateTextRequest,
     ValidateTextResponse,
     RefineSnippetRequest,
@@ -25,6 +27,7 @@ from .ai_engine import MinuteGenerator
 from .normalizer import TextNormalizer
 from .exporter import MinuteExporter
 from .presets import PresetManager
+from .name_library import NameLibraryManager
 from .cache import VideoCache
 from .limiter import RateLimiter
 
@@ -127,6 +130,44 @@ async def list_presets():
 async def save_preset(preset: OrganizationPreset):
     """Salva ou atualiza um perfil institucional."""
     return PresetManager.save_preset(preset)
+
+
+@app.get("/api/names", response_model=List[NameEntry])
+async def list_name_library(preset_id: Optional[str] = None, category: Optional[str] = None):
+    """Lista os nomes oficiais e variações salvas na Biblioteca Incremental de Nomes."""
+    return NameLibraryManager.list_entries(preset_id=preset_id, category=category)
+
+
+@app.post("/api/names", response_model=NameEntry)
+async def save_name_entry(entry: NameEntry):
+    """Adiciona ou atualiza um nome oficial e seus apelidos/erros conhecidos na Biblioteca."""
+    return NameLibraryManager.save_entry(entry)
+
+
+@app.post("/api/names/quick-learn", response_model=NameEntry)
+async def quick_learn_name(request: QuickLearnNameRequest):
+    """
+    Ensina rapidamente um nome ao sistema ('wrong_text' -> 'correct_name') a partir de uma revisão.
+    Se o nome oficial já existir na biblioteca, apenas adiciona a variação incorreta aos aliases dele.
+    """
+    try:
+        return NameLibraryManager.quick_learn(
+            wrong_text=request.wrong_text,
+            correct_name=request.correct_name,
+            category=request.category,
+            preset_id=request.preset_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/names/{entry_id}")
+async def delete_name_entry(entry_id: str):
+    """Remove um registro da Biblioteca de Nomes pelo seu ID."""
+    removed = NameLibraryManager.delete_entry(entry_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Registro não encontrado na Biblioteca de Nomes.")
+    return {"status": "ok", "deleted_id": entry_id}
 
 
 @app.get("/api/transcription/{video_id}")
@@ -254,8 +295,8 @@ async def generate_minute_endpoint(config: MinuteConfig):
 async def validate_and_normalize_text(request: ValidateTextRequest):
     """
     Validador e normalizador cartorial pós-edição:
-    Aplica deterministamente a expansão de abreviações, conversão de horas/datas para extenso
-    e formatação de parágrafo único sobre o texto que o usuário editou manualmente no sistema.
+    Aplica deterministamente a expansão de abreviações, correção de nomes da biblioteca,
+    conversão de horas/datas para extenso e formatação de parágrafo único.
     """
     normalized, corrections = TextNormalizer.validate_and_normalize(
         text=request.text,
@@ -263,6 +304,8 @@ async def validate_and_normalize_text(request: ValidateTextRequest):
         paragraph_count=request.paragraph_count,
         numbers_in_words=request.numbers_in_words,
         allow_abbreviations=request.allow_abbreviations,
+        preset_id=request.preset_id,
+        apply_name_library=request.apply_name_library,
     )
     return ValidateTextResponse(
         original_text=request.text,
