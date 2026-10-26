@@ -64,6 +64,17 @@ class GroqWhisperTranscriber:
         mime_type = f"audio/{ext}" if ext in ("mp3", "webm", "wav", "ogg") else "audio/m4a"
 
         try:
+            # Monta dica de vocabulário (prompt do Whisper) com os nomes da Biblioteca Incremental
+            whisper_prompt = "Sessão Plenária da Câmara Municipal de Vereadores. "
+            try:
+                from .name_library import NameLibraryManager
+                entries = NameLibraryManager.get_active_entries()
+                if entries:
+                    names_list = ", ".join(e.canonical_name for e in entries[:25])
+                    whisper_prompt += f"Nomes oficiais: {names_list}."
+            except Exception:
+                pass
+
             with open(audio_path, "rb") as f:
                 files = {"file": (filename, f, mime_type)}
                 data = {
@@ -71,6 +82,7 @@ class GroqWhisperTranscriber:
                     "language": "pt",
                     "response_format": "verbose_json",
                     "temperature": "0.0",
+                    "prompt": whisper_prompt[:800],
                 }
 
                 logger.info(f"Enviando áudio ({file_size_mb:.1f}MB) para Groq Whisper ({model_to_use})...")

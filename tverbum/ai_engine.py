@@ -29,6 +29,7 @@ from .ingest import ContentIngestor
 from .normalizer import TextNormalizer
 from .presets import PresetManager
 from .cache import VideoCache
+from .name_library import NameLibraryManager
 from .providers import ProviderRouter, BaseLLMProvider
 
 load_dotenv()
@@ -226,23 +227,48 @@ DIRETRIZES FUNDAMENTAIS DE REDAÇÃO DO CAMPO 'body':
             bypass_cache=config.bypass_cache,
         )
 
+        # 1.1. Limpeza Pré-IA da transcrição usando a Biblioteca Incremental de Nomes
+        if mode == "captions" and isinstance(content, str):
+            content, _ = NameLibraryManager.apply_corrections(
+                content,
+                preset_id=config.preset_id,
+                extra_known_names=config.known_attendees,
+            )
+
         # Captura da transcrição para reuso por ferramentas de imprensa e redes sociais (tNuntia)
         raw_transcript_text: Optional[str] = None
         if mode == "captions" and isinstance(content, str):
             raw_transcript_text = content
         elif meta.get("auxiliary_captions"):
-            raw_transcript_text = meta.get("auxiliary_captions")
+            raw_transcript_text, _ = NameLibraryManager.apply_corrections(
+                meta.get("auxiliary_captions"),
+                preset_id=config.preset_id,
+                extra_known_names=config.known_attendees,
+            )
+            meta["auxiliary_captions"] = raw_transcript_text
         else:
             video_id = meta.get("video_id")
             if video_id:
                 raw_transcript_text = VideoCache.get_transcript(video_id)
+                if raw_transcript_text:
+                    raw_transcript_text, _ = NameLibraryManager.apply_corrections(
+                        raw_transcript_text,
+                        preset_id=config.preset_id,
+                        extra_known_names=config.known_attendees,
+                    )
 
         # 2. Monta o prompt do sistema (suporta modo compacto para economia de TPM)
         use_compact = getattr(config, "compact_prompt", False) or (getattr(config, "ai_provider", "auto") in ("groq", "ollama"))
         system_instruction = self._build_system_prompt(config, compact=use_compact)
 
-        # 3. Informações contextuais fornecidas pelo usuário + metadados automáticos do YouTube
+        # 3. Informações contextuais fornecidas pelo usuário + metadados automáticos do YouTube + Biblioteca de Nomes
         context_details = []
+        glossary_section = NameLibraryManager.build_prompt_glossary(
+            preset_id=config.preset_id,
+            extra_known_names=config.known_attendees,
+        )
+        if glossary_section:
+            context_details.append(glossary_section)
         if config.organization_name:
             context_details.append(f"- Órgão/Entidade: {config.organization_name}")
         if config.session_type:
@@ -384,14 +410,26 @@ DIRETRIZES FUNDAMENTAIS DE REDAÇÃO DO CAMPO 'body':
                 except Exception:
                     pass
 
-        # 4. Pós-processamento Determinístico
+        # 4. Pós-processamento Determinístico (Corpo da ata + Metadados + Linha do Tempo)
+        payload_name_fixes = NameLibraryManager.sanitize_ai_payload(
+            ai_payload,
+            preset_id=config.preset_id,
+            extra_known_names=config.known_attendees,
+        )
+
         processed_body, corrections = TextNormalizer.validate_and_normalize(
             text=ai_payload.body,
             single_paragraph=config.single_paragraph,
             paragraph_count=config.paragraph_count,
             numbers_in_words=config.numbers_in_words,
             allow_abbreviations=config.allow_abbreviations,
+            preset_id=config.preset_id,
+            extra_known_names=config.known_attendees,
         )
+        if payload_name_fixes:
+            fix_msg = f"Nomes corrigidos pela Biblioteca: {', '.join(payload_name_fixes)}."
+            if not any("Nomes corrigidos" in c for c in corrections):
+                corrections.insert(0, fix_msg)
 
         # Preenche data ISO de fallback se o vídeo tiver upload_date_iso e a IA não tiver extraído
         if not ai_payload.extracted_data.session_date_iso and meta.get("upload_date_iso"):
