@@ -304,6 +304,43 @@ class ValidateTextRequest(BaseModel):
     paragraph_count: int = Field(default=1, ge=1, le=30)
     numbers_in_words: bool = Field(default=True, description="Se deve converter horas e datas para extenso")
     allow_abbreviations: bool = Field(default=False, description="Se permite abreviações como Ver., PL, Art.")
+    preset_id: Optional[str] = Field(default=None, description="ID do perfil para contexto da biblioteca de nomes")
+    apply_name_library: bool = Field(default=True, description="Se True, aplica a biblioteca de nomes e correção fonética")
+
+
+class NameEntry(BaseModel):
+    """
+    Registro de um nome oficial na Biblioteca Incremental de Nomes do tVerbum.
+    Permite corrigir deterministamente erros de transcrição do YouTube/Whisper e variações de grafia.
+    """
+
+    id: str = Field(default="", description="Identificador único gerado automaticamente se omitido")
+    canonical_name: str = Field(..., description="Grafia oficial correta (ex: 'Carlos Eduardo da Silva')")
+    aliases: List[str] = Field(
+        default_factory=list,
+        description="Variações ou erros fonéticos conhecidos (ex: ['Karlos Eduardo', 'Carlos E. Silva'])",
+    )
+    category: str = Field(
+        default="parlamentar",
+        description="Categoria ('parlamentar', 'autoridade', 'servidor', 'cidadao', 'localidade', 'entidade')",
+    )
+    preset_id: Optional[str] = Field(
+        default=None,
+        description="ID do perfil institucional vinculado ou None para aplicação global",
+    )
+    auto_phonetic: bool = Field(
+        default=True,
+        description="Se True, aplica também casamento fonético aproximado para variações inéditas",
+    )
+
+
+class QuickLearnNameRequest(BaseModel):
+    """Payload enviado para ensinar rapidamente um nome a partir de um erro encontrado na revisão."""
+
+    wrong_text: str = Field(..., description="Grafia incorreta encontrada no texto (ex: 'Thiago Tretter')")
+    correct_name: str = Field(..., description="Grafia oficial correta (ex: 'Tiago Treter')")
+    category: str = Field(default="parlamentar", description="Categoria do nome")
+    preset_id: Optional[str] = Field(default=None, description="ID do perfil opcional")
 
 
 class ValidateTextResponse(BaseModel):

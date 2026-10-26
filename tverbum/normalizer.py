@@ -4,8 +4,9 @@ Inclui sanitização de markdown, conversão de moedas, percentuais, ordinais e 
 """
 
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from num2words import num2words
+from .name_library import NameLibraryManager
 
 
 class TextNormalizer:
@@ -306,10 +307,13 @@ class TextNormalizer:
         paragraph_count: int = 1,
         numbers_in_words: bool = True,
         allow_abbreviations: bool = False,
+        preset_id: Optional[str] = None,
+        extra_known_names: Optional[List[str]] = None,
+        apply_name_library: bool = True,
     ) -> Tuple[str, List[str]]:
         """
         Valida o texto (ex: após edição manual do usuário ou geração por modelo menor),
-        aplica a sanitização de markdown e correções cartoriais determinísticas.
+        aplica a sanitização de markdown, correção de nomes da biblioteca e regras cartoriais determinísticas.
         Retorna (texto_normalizado, lista_de_correcoes_aplicadas).
         """
         current = text.strip()
@@ -328,14 +332,23 @@ class TextNormalizer:
                 corrections.append("Abreviações (como Ver., PL, Art., Of.) foram expandidas para sua forma por extenso.")
                 current = expanded
 
-        # 3. Conversão de números para extenso (horários, datas, moedas, percentuais, ordinais)
+        # 3. Correção de nomes próprios via Biblioteca Incremental e Fonética PT-BR
+        if apply_name_library:
+            fixed_names, name_changes = NameLibraryManager.apply_corrections(
+                current, preset_id=preset_id, extra_known_names=extra_known_names
+            )
+            if fixed_names != current and name_changes:
+                corrections.append(f"Nomes corrigidos pela Biblioteca: {', '.join(name_changes)}.")
+                current = fixed_names
+
+        # 4. Conversão de números para extenso (horários, datas, moedas, percentuais, ordinais)
         if numbers_in_words:
             with_words = cls.apply_numbers_in_words(current)
             if with_words != current:
                 corrections.append("Números, horários, datas, valores monetários e percentuais foram convertidos para extenso.")
                 current = with_words
 
-        # 4. Ajuste na estrutura de parágrafos
+        # 5. Ajuste na estrutura de parágrafos
         target_paras = 1 if single_paragraph else max(1, paragraph_count)
         formatted_paras = cls.enforce_paragraph_count(current, target_count=target_paras)
         if formatted_paras != current:
