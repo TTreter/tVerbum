@@ -2,83 +2,117 @@
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-REST%20API-009688?logo=fastapi&logoColor=white)
-![Gemini](https://img.shields.io/badge/AI-Google%20Gemini-8E75B2?logo=googlegemini&logoColor=white)
+![Multi-Provider](https://img.shields.io/badge/AI%20Providers-Gemini%20%7C%20Groq%20%7C%20OpenRouter%20%7C%20Ollama-emerald)
+![Free-Tier](https://img.shields.io/badge/Free%20Tier-100%25%20Gratuito-brightgreen)
 ![WebComponent](https://img.shields.io/badge/UI-%3Ctverbum--editor%3E-amber)
+![License](https://img.shields.io/badge/License-MIT-blue.svg)
 
-> **Motor facilitador para redação, validação cartorial e revisão assistida de atas de sessões plenárias e reuniões a partir de vídeos do YouTube.**
+> **Motor facilitador para redação, validação cartorial e revisão assistida de atas de sessões plenárias e reuniões a partir de vídeos do YouTube.**  
+> *Projetado com arquitetura multi-provedor resiliente e otimizada para modelos de IA 100% gratuitos (Google AI Studio, Groq Cloud, OpenRouter e Ollama Local).*
 
-O **tVerbum** foi projetado para se integrar facilmente aos seus sistemas web (em **Python**, **JavaScript/Node.js**, **Next.js**, **PHP/Laravel**, etc.). Basta fornecer o **link do vídeo no YouTube** e o **número da ata** para receber um **JSON estruturado** contendo o texto formal da ata (em parágrafo único contínuo, com datas/horários por extenso e sem abreviações), além dos dados prontos para o seu banco de dados (presentes, ausentes, matérias votadas e linha do tempo do vídeo).
+O **tVerbum** foi projetado para se integrar facilmente aos seus sistemas web (em **Python**, **JavaScript/Node.js**, **Next.js**, **PHP/Laravel**, etc.). Basta fornecer o **link do vídeo no YouTube** e o **número da ata** para receber um **JSON estruturado** contendo o texto formal da ata (em parágrafo único contínuo, com datas/horários por extenso, valores monetários e sem abreviações), além dos dados prontos para o seu banco de dados (presentes, ausentes, matérias votadas e linha do tempo do vídeo).
 
 ---
 
 ## ✨ Principais Recursos
 
-- **Motor Facilitador JSON (`Headless First`)**:
-  - Devolve em uma única requisição o texto formal do corpo da ata (`body`) e o objeto `extracted_data` (data ISO `YYYY-MM-DD`, horários de abertura e encerramento, lista de presentes e matérias votadas).
+- **Arquitetura Multi-Provedor com Failover Automático**:
+  - Suporte nativo a **Google Gemini**, **Groq (LLaMA 3.3 70B)**, **OpenRouter (modelos `:free`)** e **Ollama Local (100% offline e privado)**.
+  - Se um provedor gratuito atingir o limite de requisições por minuto (`HTTP 429`), o sistema faz **fallback transparente** para o próximo provedor gratuito sem interromper o usuário.
+- **Ingestão Frugal de Áudio e Texto (Zero Estouro de Cota)**:
+  - Prioriza legendas em texto (`0 tokens multimídia`).
+  - Quando o vídeo não tem legendas no YouTube, extrai automaticamente a faixa de áudio leve e utiliza o **Groq Whisper (`whisper-large-v3-turbo`) gratuito**, transcrevendo a sessão em segundos com timestamps `[HH:MM:SS]`.
+  - Evita o consumo excessivo de tokens de vídeo bruto (~1.850.000 tokens em 2h), mantendo o consumo em ~25k tokens.
+- **Normalizador e Linter Cartorial Determinístico**:
+  - **Parágrafo Único Contínuo (`single_paragraph`)** ou divisão exata em parágrafos temáticos (`paragraph_count`).
+  - **Números, Horários e Datas por Extenso (`numbers_in_words`)**: Conversão precisa de horários (*"dezoito horas e sete minutos"*), datas (*"vinte e oito de setembro de dois mil e vinte e seis"*) e ordinais (*"10ª Legislatura"* → *"décima Legislatura"*), preservando numerações de leis (*"Projeto de Lei nº 48/2026"*).
+  - **Conversão Financeira e Percentual**: Transforma valores (*"R$ 150.000,00"* → *"cento e cinquenta mil reais"*) e percentuais (*"10%"* → *"dez por cento"*).
+  - **Sanitização de Markdown**: Remove asteriscos, hashtags ou marcadores de listas que modelos menores de IA possam gerar, garantindo formato notarial limpo.
+  - **Vedação a Abreviações (`allow_abbreviations=False`)**: Expande automaticamente *"Ver."* → *"Vereador"*, *"PL"* → *"Projeto de Lei"*, *"Art."* → *"Artigo"*.
+- **Controle de Taxa (Rate Limiting) e Cache SQLite Estendido**:
+  - Janela deslizante de requisições por minuto e retentativas com **exponential backoff e jitter**.
+  - Cache SQLite de transcrições e atas completas por hash SHA-256 de configuração: reprocessamentos com os mesmos parâmetros são devolvidos instantaneamente sem gastar chamadas de IA.
 - **Web Component Importável (`<tverbum-editor>`)**:
-  - Editor visual em formato de folha A4 oficial encapsulado em *Shadow DOM* (`/tverbum-editor.js`), que você pode importar em qualquer página do seu sistema com 1 linha de código para revisar o texto antes de salvar no seu banco de dados.
-- **Regras Estritas de Redação Legislativa e Cartorial**:
-  - **Parágrafo Único Contínuo (`single_paragraph`)** ou número customizável de parágrafos (`paragraph_count`).
-  - **Números, Datas e Horários por Extenso (`numbers_in_words`)**: Converte horários (*"dezoito horas e sete minutos"*) e datas por extenso, preservando números oficiais de Leis, Projetos e Ofícios (*"Projeto de Lei nº 48/2026"*).
-  - **Vedação a Abreviações (`allow_abbreviations=False`)**: Expande automaticamente *"Ver."* para *"Vereador"*, *"PL"* para *"Projeto de Lei"*, *"Art."* para *"Artigo"*, etc.
-- **Ingestão Multimodal Inteligente + Cache SQLite**:
-  - **`youtube_direct`**: Envia o vídeo do YouTube diretamente para a API multimodal do Gemini assistir e ouvir a sessão (estilo *NotebookLM*).
-  - **`auto` / `captions` / `audio`**: Extrai metadados automáticos do YouTube (título, data de publicação, descrição), legendas ou stream de áudio leve via `yt-dlp`, com cache local em SQLite para reprocessamento instantâneo.
-- **Ferramentas de Revisão Assistida**:
-  - **Alertas de Revisão (`review_warnings`)**: Destaca em amarelo termos ou nomes que merecem conferência visual rápida.
-  - **Linha do Tempo Sincronizada (`timeline_map`)**: Timestamps clicáveis que abrem o vídeo do YouTube no segundo exato de cada fala.
-  - **Validador Pós-Edição (`POST /api/validate-text`)**: Garante que edições manuais feitas pelo usuário mantenham o padrão de números por extenso e parágrafo único.
-  - **Reescrita Rápida de Trecho (`POST /api/refine-snippet`)**: Reescreve apenas uma frase selecionada no editor com IA em ~1 segundo.
-- **Exportação Oficial com Brasão**:
-  - Gera arquivos **PDF (`.pdf`)**, **Word (`.docx`)**, **Markdown (`.md`)** e **Texto (`.txt`)** diagramados com cabeçalho institucional, logotipo/brasão e linhas de assinatura.
+  - Editor visual em formato de folha A4 timbrada encapsulado em *Shadow DOM* (`/tverbum-editor.js`), importável em qualquer aplicação web com 1 linha de código.
+- **Revisão Assistida e Exportação**:
+  - **Alertas de Revisão (`review_warnings`)**: Destaca nomes e números críticos que merecem conferência humana.
+  - **Linha do Tempo Sincronizada (`timeline_map`)**: Timestamps clicáveis que abrem o vídeo do YouTube no momento exato de cada fala.
+  - **Reescrita Rápida de Trecho (`POST /api/refine-snippet`)**: Refina frases individuais com IA em ~1 segundo.
+  - **Exportação Multiformato**: Gera **PDF (`.pdf`)**, **Word (`.docx`)**, **Markdown (`.md`)** e **Texto (`.txt`)** diagramados com brasão oficial e linhas de assinatura.
 
 ---
 
-## 📐 Arquitetura de Integração
+## 🌐 Comparativo de Provedores de IA Suportados
+
+| Provedor | Modelo Padrão | Janela Contexto | Camada Gratuita | Destaque no tVerbum |
+| :--- | :--- | :--- | :--- | :--- |
+| **Google Gemini** | `gemini-3.8-flash` / `gemini-2.5-flash` | 1.000.000 tokens | 15 RPM / 1M TPM / 1.500 RPD | Enorme janela de contexto e compreensão cartorial avançada. |
+| **Groq Cloud** | `llama-3.3-70b-versatile` | 128.000 tokens | 30 RPM / 6.000 TPM / 14.400 RPD | **Velocidade extrema** (250+ tokens/s) e **Whisper gratuito** para áudio. |
+| **OpenRouter** | `google/gemini-2.0-flash-exp:free` | 128.000 tokens | ~20 RPM (conforme modelo) | Excelente backup universal com múltiplos modelos `:free`. |
+| **Ollama Local** | `qwen2.5:7b` ou `llama3.2:3b` | Ilimitado | **Sem limites (100% offline)** | Privacidade total e autonomia para câmaras sem internet rápida. |
+
+---
+
+## 📐 Arquitetura do Sistema
 
 ```mermaid
-flowchart LR
-    A[1. Seu Sistema Web] -->|Envia Link e Parametros| B[2. Ingestao YouTube e Cache]
-    B --> C[3. Google Gemini IA]
-    C --> D[4. Normalizador Cartorial]
-    D -->|Retorna JSON Estruturado| E[5. Revisao e Banco de Dados]
+flowchart TD
+    A[Vídeo do YouTube] --> B{Tem legendas?}
+    B -- Sim --> C[Legendas Limpas]
+    B -- Não --> D[Groq Whisper Gratuito]
+    D --> C
+    C --> E[Roteador Multi-Provedor com Failover]
+    E --> F[Gemini / Groq / OpenRouter / Ollama]
+    F --> G[Normalizador Determinístico Python]
+    G --> H[MinuteOutput: JSON + DOCX + PDF]
 ```
 
 ---
 
-## 🚀 Instalação e Configuração
+## 🚀 Instalação e Execução
 
-### 1. Instalar dependências
+### 1. Clonar repositório e instalar dependências
 ```bash
+git clone https://github.com/TTreter/tVerbum.git
+cd tVerbum
 pip install -r requirements.txt
 ```
 
-### 2. Configurar a variável de ambiente (`.env`)
-Copie o arquivo `.env.example` para `.env` e informe sua chave da API do Google Gemini:
+### 2. Configurar o arquivo de ambiente (`.env`)
+Copie o modelo de ambiente:
 ```bash
 cp .env.example .env
 ```
+Edite o arquivo `.env` com a sua chave gratuita preferida:
 ```env
-GEMINI_API_KEY=sua_chave_aqui
-DEFAULT_MODEL=gemini-3.8-flash
+# Provedor prioritário: 'auto' | 'gemini' | 'groq' | 'openrouter' | 'ollama'
+AI_PROVIDER=auto
+
+# Chaves gratuitas (preencha ao menos uma):
+GEMINI_API_KEY=sua_chave_gemini
+GROQ_API_KEY=sua_chave_groq
+OPENROUTER_API_KEY=sua_chave_openrouter
+
+# Ollama Local (opcional, sem chave):
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:7b
+
 PORT=8000
 ```
 
-### 3. Iniciar o servidor local
-No Windows, basta dar dois cliques em **`iniciar_tverbum.bat`** ou executar no terminal:
+### 3. Iniciar o servidor
+No Windows, dê dois cliques em **`iniciar_tverbum.bat`** ou execute:
 ```bash
 python run_server.py
 ```
-- **Interface Web de Testes**: `http://localhost:8000`
-- **Documentação Interativa (Swagger)**: `http://localhost:8000/docs`
+- **Interface Web de Testes & Diagnóstico**: `http://localhost:8000`
+- **Documentação Swagger Interativa**: `http://localhost:8000/docs`
 
 ---
 
-## 💻 Como Utilizar no Seu Sistema Web
+## 💻 Exemplos de Uso
 
 ### Opção 1: Consumir apenas o JSON (Headless Facilitador)
-Ideal quando você já possui a tela de cadastro/edição de atas no seu próprio sistema:
-
 ```javascript
 const response = await fetch('http://localhost:8000/api/generate', {
   method: 'POST',
@@ -86,9 +120,10 @@ const response = await fetch('http://localhost:8000/api/generate', {
   body: JSON.stringify({
     video_url: 'https://www.youtube.com/watch?v=...',
     session_number: '21/2026',
-    preset_id: 'camara_exemplo',     // Carrega cabeçalho, vereadores e partidos
-    single_paragraph: true,          // Parágrafo único contínuo
-    numbers_in_words: true,          // Datas e horários por extenso
+    preset_id: 'camara_exemplo',     // Perfil salvo da Câmara
+    ai_provider: 'auto',             // 'auto', 'gemini', 'groq', 'openrouter', 'ollama'
+    single_paragraph: true,          // Parágrafo único contínuo notarial
+    numbers_in_words: true,          // Datas, horas e moedas por extenso
     allow_abbreviations: false,      // Sem abreviações (Vereador, Projeto de Lei...)
     detail_level: 'padrao'           // 'resumido', 'padrao' ou 'detalhado'
   })
@@ -96,87 +131,36 @@ const response = await fetch('http://localhost:8000/api/generate', {
 
 const ata = await response.json();
 
-// 1. Texto corrido da ata pronto para exibir no seu sistema:
+// Texto formal da ata pronto para revisão:
 console.log(ata.body);
 
-// 2. Dados estruturados prontos para salvar nas colunas do seu banco de dados:
+// Dados prontos para o banco de dados:
 console.log(ata.extracted_data.session_date_iso); // "2026-09-28"
-console.log(ata.extracted_data.start_time);       // "18:07"
 console.log(ata.extracted_data.present_members);  // ["Carlos Eduardo da Silva", ...]
-console.log(ata.extracted_data.voted_matters);    // [{ matter: "Projeto de Lei nº 48/2026", result: "Aprovado por unanimidade" }]
+console.log(ata.extracted_data.voted_matters);    // [{ matter: "Projeto de Lei nº 48/2026", result: "Aprovado" }]
 ```
 
 ---
 
 ### Opção 2: Importar o Componente `<tverbum-editor>` no seu Frontend
-Se quiser embutir a folha timbrada editável (com botão de normalização cartorial, reescrita de trecho com IA e destaque de revisão) dentro do seu sistema:
-
 ```html
-<!-- 1. Importe o Web Component diretamente do servidor tVerbum -->
+<!-- 1. Importa o Web Component -->
 <script src="http://localhost:8000/tverbum-editor.js"></script>
 
-<!-- 2. Adicione a tag onde desejar na sua página -->
+<!-- 2. Adiciona a folha timbrada oficial editável -->
 <tverbum-editor id="meu-editor" api-base="http://localhost:8000" show-save-button></tverbum-editor>
 
 <script>
   const editor = document.getElementById('meu-editor');
+  editor.setMinute(ata); // Carrega a ata gerada pelo tVerbum
 
-  // Carrega o JSON retornado pelo POST /api/generate
-  editor.setMinute(ata);
-
-  // Escuta o clique no botão "Salvar Ata" para gravar no banco de dados do seu sistema:
+  // Escuta o salvamento após a revisão humana:
   editor.addEventListener('tverbum-save', (event) => {
     const ataRevisada = event.detail;
-    console.log('Texto revisado:', ataRevisada.body);
-    // Envie ataRevisada para o backend do seu sistema!
+    salvarNoMeuBackend(ataRevisada);
   });
 </script>
 ```
-
----
-
-### Opção 3: Uso Direto como Biblioteca Python
-```python
-from tverbum import MinuteConfig, generate_minute, MinuteExporter
-
-config = MinuteConfig(
-    video_url="https://www.youtube.com/watch?v=...",
-    session_number="21/2026",
-    preset_id="camara_exemplo",
-    single_paragraph=True,
-    numbers_in_words=True,
-    allow_abbreviations=False,
-)
-
-minute = generate_minute(config)
-print(minute.body)
-
-# Opcional: exportar para PDF ou Word (.docx)
-MinuteExporter.to_pdf(minute, "Ata_21_2026.pdf")
-MinuteExporter.to_docx(minute, "Ata_21_2026.docx")
-```
-
----
-
-## ⚙️ Parâmetros de Configuração (`MinuteConfig`)
-
-| Parâmetro | Tipo | Padrão | Descrição |
-| :--- | :--- | :--- | :--- |
-| `video_url` | `str` | *(obrigatório)* | Link do vídeo da sessão no YouTube |
-| `session_number` | `str` | *(obrigatório)* | Número da ata (ex: `"21/2026"`) |
-| `preset_id` | `str \| None` | `None` | ID de um perfil institucional salvo (ex: `"camara_exemplo"`) |
-| `session_type` | `str` | `"Sessão Ordinária"` | Tipo da sessão plenária ou reunião |
-| `organization_name` | `str` | `""` | Nome da Câmara, Conselho ou Instituição |
-| `state` | `str` | `""` | Estado da federação |
-| `single_paragraph` | `bool` | `True` | Se `True`, redige em parágrafo único contínuo |
-| `paragraph_count` | `int` | `1` | Quantidade exata de parágrafos desejada (`1` a `30`) |
-| `numbers_in_words` | `bool` | `True` | Se `True`, escreve datas, horas e números por extenso |
-| `allow_abbreviations` | `bool` | `False` | Se `False`, expande abreviações (`Ver.` → `Vereador`, `PL` → `Projeto de Lei`) |
-| `detail_level` | `str` | `"padrao"` | Profundidade dos discursos: `"resumido"`, `"padrao"` ou `"detalhado"` |
-| `ingestion_mode` | `str` | `"auto"` | `"auto"`, `"youtube_direct"`, `"captions"` ou `"audio"` |
-| `known_attendees` | `list[str]` | `[]` | Lista nominal de presentes e partidos para ancorar a grafia |
-| `agenda_context` | `str \| None` | `None` | Pauta / Ordem do Dia / Ofícios para ancorar números de projetos |
-| `include_raw_transcript` | `bool` | `False` | Se `True`, inclui a transcrição integral no `MinuteOutput` para reuso externo (ex: tNuntia) |
 
 ---
 
@@ -184,14 +168,15 @@ MinuteExporter.to_docx(minute, "Ata_21_2026.docx")
 
 | Método | Rota | Descrição |
 | :--- | :--- | :--- |
-| `POST` | `/api/generate` | Gera a ata a partir do vídeo e retorna o JSON completo (`MinuteOutput`) |
-| `GET` | `/api/session/{minute_id}` | Recupera o `MinuteOutput` de uma sessão gerada anteriormente |
-| `GET` | `/api/transcription/{video_id}` | Obtém a transcrição e metadados diretamente do cache ou YouTube |
-| `POST` | `/api/validate-text` | Normaliza um texto editado manualmente (extenso, abreviações, parágrafo único) |
-| `POST` | `/api/refine-snippet` | Reescreve apenas um trecho selecionado com IA |
-| `POST` | `/api/export` | Exporta o JSON da ata (com edições do usuário) para `.pdf`, `.docx`, `.txt` ou `.md` |
-| `GET` | `/api/presets` | Lista os perfis institucionais cadastrados |
-| `POST` | `/api/presets` | Cria ou atualiza um perfil institucional |
+| `POST` | `/api/generate` | Gera a ata a partir do vídeo com failover e rate limiting (`MinuteOutput`) |
+| `GET` | `/api/providers` | Lista provedores disponíveis e executa teste de latência (`?test=true`) |
+| `GET` | `/api/session/{minute_id}` | Recupera uma ata gerada em memória (aceita `latest` para a mais recente) |
+| `GET` | `/api/transcription/{video_id}` | Obtém a transcrição cronológica diretamente do cache ou YouTube/Whisper |
+| `POST` | `/api/validate-text` | Normaliza texto editado (extenso, abreviações, moedas, parágrafo único) |
+| `POST` | `/api/refine-snippet` | Reescreve frase selecionada com IA via provedor ativo |
+| `POST` | `/api/export` | Exporta a ata para `.pdf`, `.docx`, `.txt` ou `.md` |
+| `GET` | `/api/presets` | Lista perfis institucionais cadastrados |
+| `POST` | `/api/presets` | Cadastra ou atualiza perfil institucional |
 | `GET` | `/tverbum-editor.js` | Entrega o Web Component `<tverbum-editor>` standalone |
 | `DELETE`| `/api/cache` | Limpa o cache SQLite local |
 

@@ -64,13 +64,57 @@
         </div>
 
         <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1">Modo de Processamento da IA</label>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Modo de Processamento de Mídia</label>
           <select id="ingestion_mode" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:ring-2 focus:ring-amber-500 focus:outline-none">
-            <option value="auto" selected>Automático Inteligente (Cache SQLite + Legendas ou Vídeo Direto)</option>
-            <option value="youtube_direct">Vídeo Direto no Gemini (Multimodal estilo NotebookLM - Maior Precisão)</option>
+            <option value="auto" selected>Automático Frugal (Legendas / Groq Whisper - 0 Tokens de Vídeo)</option>
             <option value="captions">Somente Legendas do YouTube (Ultra-rápido ~3s)</option>
+            <option value="youtube_direct">Vídeo Direto no Gemini (Multimodal MP4)</option>
             <option value="audio">Download de Áudio + Gemini File API</option>
           </select>
+        </div>
+      </div>
+
+      <!-- AI Provider and Zero Cost Settings Card -->
+      <div class="bg-slate-950 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-3.5">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-white flex items-center gap-2">
+            <svg class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            2. Provedor de IA & Camada Gratuita
+          </h2>
+          <button type="button" onclick="testProvidersDiagnostics()" id="btn_test_providers" class="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded-lg hover:bg-emerald-500/20 font-medium transition flex items-center gap-1" title="Testa a conectividade de cada provedor">
+            ⚡ Testar Provedores
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">Provedor de IA</label>
+            <select id="ai_provider" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:ring-2 focus:ring-emerald-500 focus:outline-none">
+              <option value="auto" selected>Automático (Gemini ➔ Groq ➔ OpenRouter ➔ Ollama)</option>
+              <option value="gemini">Google Gemini (Free Tier 1M tokens)</option>
+              <option value="groq">Groq (LLaMA 3.3 70B Free ~250 t/s)</option>
+              <option value="openrouter">OpenRouter (:free Models)</option>
+              <option value="ollama">Ollama Local (100% Offline / Privado)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">Economia de Cota</label>
+            <div class="flex items-center h-9 px-3 bg-slate-900 border border-slate-700 rounded-lg">
+              <label class="inline-flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                <input type="checkbox" id="compact_prompt" class="rounded bg-slate-800 border-slate-600 text-emerald-500 focus:ring-emerald-500">
+                <span>Prompt Compacto (Poupa TPM)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Provider Status Badges -->
+        <div id="provider_badges_container" class="flex flex-wrap items-center gap-1.5 pt-1">
+          <span class="text-xs text-slate-500 mr-1">Provedores:</span>
+          <span id="badge_prov_gemini" class="text-xs px-2 py-0.5 rounded bg-slate-900 text-slate-500 border border-slate-800">Gemini</span>
+          <span id="badge_prov_groq" class="text-xs px-2 py-0.5 rounded bg-slate-900 text-slate-500 border border-slate-800">Groq</span>
+          <span id="badge_prov_openrouter" class="text-xs px-2 py-0.5 rounded bg-slate-900 text-slate-500 border border-slate-800">OpenRouter</span>
+          <span id="badge_prov_ollama" class="text-xs px-2 py-0.5 rounded bg-slate-900 text-slate-500 border border-slate-800">Ollama</span>
         </div>
       </div>
 
@@ -223,6 +267,7 @@
           <button type="button" id="badge_session_id" onclick="copySessionId()" class="hidden text-xs px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 font-mono hover:bg-amber-500/20 transition" title="Clique para copiar o UUID da sessão para o tNuntia">
             UUID: <span id="session_id_val"></span> 📋
           </button>
+          <span id="badge_provider_info" class="hidden text-xs px-2.5 py-0.5 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/20 font-mono" title="Provedor e modelo utilizados na geração"></span>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
@@ -313,6 +358,7 @@ const ata = await res.json();
     }
 
     window.addEventListener('DOMContentLoaded', async () => {
+      loadProvidersStatus();
       try {
         const res = await fetch('/api/presets');
         if (res.ok) {
@@ -327,6 +373,53 @@ const ata = await res.json();
         }
       } catch (e) {}
     });
+
+    async function loadProvidersStatus() {
+      try {
+        const res = await fetch('/api/providers');
+        if (!res.ok) return;
+        const data = await res.json();
+        const provs = data.providers || {};
+        for (const [key, isAvail] of Object.entries(provs)) {
+          const el = document.getElementById('badge_prov_' + key);
+          if (el) {
+            if (isAvail) {
+              el.className = 'text-xs px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
+              el.innerText = key + ' ✓';
+            } else {
+              el.className = 'text-xs px-2 py-0.5 rounded bg-slate-900 text-slate-500 border border-slate-800';
+              el.innerText = key;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    async function testProvidersDiagnostics() {
+      const btn = document.getElementById('btn_test_providers');
+      btn.innerText = '⚡ Testando...';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/providers?test=true');
+        const data = await res.json();
+        const diag = data.diagnostics || {};
+        let report = ['Diagnóstico de Conexão dos Provedores:\n'];
+        for (const [k, d] of Object.entries(diag)) {
+          if (d.success) {
+            report.push(`✅ ${k.toUpperCase()}: Operacional (${d.latency_seconds}s) - Modelo: ${d.model_used}`);
+          } else {
+            report.push(`❌ ${k.toUpperCase()}: ${d.error || 'Indisponível'}`);
+          }
+        }
+        alert(report.join('\n'));
+      } catch (err) {
+        alert('Erro ao testar provedores: ' + err.message);
+      } finally {
+        btn.innerText = '⚡ Testar Provedores';
+        btn.disabled = false;
+        loadProvidersStatus();
+      }
+    }
 
     function toggleIntegrationModal() {
       document.getElementById('integration_modal').classList.toggle('hidden');
@@ -419,6 +512,8 @@ const ata = await res.json();
         include_signatures: document.getElementById('include_signatures').checked,
         detail_level: document.getElementById('detail_level').value,
         ingestion_mode: document.getElementById('ingestion_mode').value,
+        ai_provider: document.getElementById('ai_provider').value,
+        compact_prompt: document.getElementById('compact_prompt').checked,
         known_attendees: attendees,
         agenda_context: document.getElementById('agenda_context').value.trim() || null,
       };
@@ -450,6 +545,15 @@ const ata = await res.json();
           window.lastSessionId = data.id;
           document.getElementById('session_id_val').innerText = data.id.substring(0, 8) + '...';
           document.getElementById('badge_session_id').classList.remove('hidden');
+        }
+
+        // Exibe provedor e modelo utilizados
+        if (data.metadata && (data.metadata.provider_used || data.metadata.model_used)) {
+          const prov = data.metadata.provider_used || 'IA';
+          const mod = data.metadata.model_used || '';
+          const infoEl = document.getElementById('badge_provider_info');
+          infoEl.innerText = `${prov.toUpperCase()} (${mod})`;
+          infoEl.classList.remove('hidden');
         }
 
         document.getElementById('badge_status').innerText = 'Pronta para Revisão';

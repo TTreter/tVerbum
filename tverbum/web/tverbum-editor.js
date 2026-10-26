@@ -213,7 +213,13 @@ class TVerbumEditor extends HTMLElement {
     const chars = text.length;
     const statEl = this.shadowRoot.getElementById('tv-stats');
     if (statEl) {
-      statEl.innerText = `${words} palavras · ${chars} caracteres`;
+      let extra = '';
+      if (this._minute && this._minute.metadata && (this._minute.metadata.provider_used || this._minute.metadata.model_used)) {
+        const prov = this._minute.metadata.provider_used || '';
+        const mod = this._minute.metadata.model_used || '';
+        extra = ` · IA: ${prov} (${mod})`;
+      }
+      statEl.innerText = `${words} palavras · ${chars} caracteres${extra}`;
     }
     this.dispatchEvent(new CustomEvent('tverbum-change', {
       detail: {
