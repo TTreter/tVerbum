@@ -77,7 +77,7 @@ class MinuteGenerator:
                 "GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY ou inicie o Ollama localmente."
             )
 
-    def _build_system_prompt(self, config: MinuteConfig) -> str:
+    def _build_system_prompt(self, config: MinuteConfig, compact: bool = False) -> str:
         """Monta as instruções do sistema calibradas com base no padrão legislativo brasileiro."""
         if config.single_paragraph or config.paragraph_count == 1:
             paragraph_rule = (
@@ -129,6 +129,13 @@ class MinuteGenerator:
         }
         detail_rule = detail_rules.get(config.detail_level, detail_rules["padrao"])
 
+        example_section = ""
+        if not compact:
+            example_section = """
+EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
+"Aos vinte e oito dias de setembro de dois mil e vinte e seis, reuniram-se nas dependências da Câmara Municipal de Vereadores de Exemplo os integrantes da 10ª Legislatura para a realização da Sessão Plenária Ordinária de número quarenta. Havendo quórum regimental e, invocando a proteção de Deus, o Senhor Presidente Carlos Eduardo da Silva declarou aberta a sessão as dezoito horas e sete minutos. Na sequência, o Senhor Secretário realizou a primeira chamada, a qual acusou a presença dos vereadores: Carlos Eduardo da Silva e Ana Paula Oliveira (PARTIDO A); Marcos Vinícius Santos e Helena Costa Ferreira (PARTIDO B); e Roberto Almeida Souza (PARTIDO C). Em seguida, procedeu-se à leitura da mensagem do dia, sendo conduzida a oração do "Pai Nosso". Logo após, foram lidas as correspondências, destacando-se o Ofício Circular nº 46/2026 do Tribunal de Contas e o Ofício nº 134/2026 do Executivo, encaminhando o Projeto de Lei nº 49/2026. A Presidência informou que a Ata nº 20 foi enviada previamente aos vereadores e considerada tacitamente aprovada. No espaço do pequeno expediente, três vereadores fizeram uso da palavra... Ingressando na ordem do dia, foi apreciado o Projeto de Lei nº 48/2026... Após a leitura dos pareceres favoráveis das comissões, o projeto foi colocado em votação e aprovado por unanimidade... Esgotadas as matérias, a sessão foi encerrada as dezenove horas e dezoito minutos, sendo a próxima sessão ordinária convocada para o dia treze de outubro de dois mil e vinte e seis (terça-feira), às dezoito horas."
+"""
+
         prompt = f"""Você é um redator oficial e consultor legislativo sênior especializado na confecção de atas institucionais e parlamentares brasileiras.
 Sua missão é analisar a sessão fornecida e retornar um objeto JSON estruturado contendo:
 1. 'body': O texto formal completo do corpo da ata (sem cabeçalho institucional e sem linhas de assinatura).
@@ -151,11 +158,34 @@ DIRETRIZES FUNDAMENTAIS DE REDAÇÃO DO CAMPO 'body':
    - Ordem do Dia: Matérias apreciadas e votadas (Projetos de Lei, pareceres das comissões, resultado da votação como 'aprovado por unanimidade'), seguidas da leitura das demais matérias encaminhadas às comissões ou apresentadas (Projetos de Lei, Indicações, Pedidos de Providência, Pedidos de Informação com seus respectivos números e autores).
    - Explicações Pessoais: Manifestações finais dos vereadores que fizeram uso da palavra.
    - Encerramento: Declaração de encerramento com horário por extenso e convocação para a próxima sessão.
-
-EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
-"Aos vinte e oito dias de setembro de dois mil e vinte e seis, reuniram-se nas dependências da Câmara Municipal de Vereadores de Exemplo os integrantes da 10ª Legislatura para a realização da Sessão Plenária Ordinária de número quarenta. Havendo quórum regimental e, invocando a proteção de Deus, o Senhor Presidente Carlos Eduardo da Silva declarou aberta a sessão as dezoito horas e sete minutos. Na sequência, o Senhor Secretário realizou a primeira chamada, a qual acusou a presença dos vereadores: Carlos Eduardo da Silva e Ana Paula Oliveira (PARTIDO A); Marcos Vinícius Santos e Helena Costa Ferreira (PARTIDO B); e Roberto Almeida Souza (PARTIDO C). Em seguida, procedeu-se à leitura da mensagem do dia, sendo conduzida a oração do "Pai Nosso". Logo após, foram lidas as correspondências, destacando-se o Ofício Circular nº 46/2026 do Tribunal de Contas e o Ofício nº 134/2026 do Executivo, encaminhando o Projeto de Lei nº 49/2026. A Presidência informou que a Ata nº 20 foi enviada previamente aos vereadores e considerada tacitamente aprovada. No espaço do pequeno expediente, três vereadores fizeram uso da palavra... Ingressando na ordem do dia, foi apreciado o Projeto de Lei nº 48/2026... Após a leitura dos pareceres favoráveis das comissões, o projeto foi colocado em votação e aprovado por unanimidade... Esgotadas as matérias, a sessão foi encerrada as dezenove horas e dezoito minutos, sendo a próxima sessão ordinária convocada para o dia treze de outubro de dois mil e vinte e seis (terça-feira), às dezoito horas."
-"""
+{example_section}"""
         return prompt
+
+    @staticmethod
+    def _prepare_transcript_for_inference(transcript_text: str, max_chars: int = 120000) -> str:
+        """
+        Garante que transcrições muito longas (>3 horas) caibam no contexto de modelos gratuitos.
+        Se exceder max_chars, condensa repetições e preserva as marcações temporais chave.
+        """
+        if not transcript_text or len(transcript_text) <= max_chars:
+            return transcript_text
+
+        lines = transcript_text.splitlines()
+        if len(lines) <= 500:
+            return transcript_text[:max_chars]
+
+        # Mantém cabeçalho e rodapé cronológicos integrais e condensa o meio mantendo timestamps
+        keep_lines: List[str] = []
+        for i, line in enumerate(lines):
+            # Sempre mantém primeiras 100 linhas e últimas 100 linhas
+            if i < 100 or i >= len(lines) - 100:
+                keep_lines.append(line)
+            # Para o miolo, inclui se tiver menção a votação, ordem do dia, presença ou a cada 2 linhas
+            elif any(k in line.lower() for k in ("votação", "projeto", "aprovado", "rejeitado", "chamada", "ordem do dia", "expediente")) or (i % 2 == 0):
+                keep_lines.append(line)
+
+        condensed = "\n".join(keep_lines)
+        return condensed[:max_chars]
 
     def _wait_for_file_active(self, uploaded_file: Any, timeout_seconds: int = 180) -> Any:
         """Aguarda até que um arquivo de áudio/vídeo enviado à Gemini File API fique no estado ACTIVE."""
@@ -207,8 +237,9 @@ EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
             if video_id:
                 raw_transcript_text = VideoCache.get_transcript(video_id)
 
-        # 2. Monta o prompt do sistema
-        system_instruction = self._build_system_prompt(config)
+        # 2. Monta o prompt do sistema (suporta modo compacto para economia de TPM)
+        use_compact = getattr(config, "compact_prompt", False) or (getattr(config, "ai_provider", "auto") in ("groq", "ollama"))
+        system_instruction = self._build_system_prompt(config, compact=use_compact)
 
         # 3. Informações contextuais fornecidas pelo usuário + metadados automáticos do YouTube
         context_details = []
@@ -263,7 +294,8 @@ EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
         try:
             # Caso 1: Transcrição textual (modo mais frugal e compatível com 100% dos modelos gratuitos)
             if mode == "captions":
-                user_content = [f"{user_prompt_header}\nTRANSCRIÇÃO DA SESSÃO:\n{content}"]
+                prepared_content = self._prepare_transcript_for_inference(content)
+                user_content = [f"{user_prompt_header}\nTRANSCRIÇÃO DA SESSÃO:\n{prepared_content}"]
                 ai_payload, used_provider, used_model = self.router.generate_structured(
                     contents=user_content,
                     system_instruction=system_instruction,

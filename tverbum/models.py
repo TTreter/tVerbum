@@ -210,6 +210,10 @@ class MinuteConfig(BaseModel):
         default=None,
         description="Nome específico do modelo no provedor (opcional)",
     )
+    compact_prompt: bool = Field(
+        default=False,
+        description="Se True, utiliza instruções concisas otimizadas para modelos de IA gratuitos com limites de TPM",
+    )
 
     # --- Estrutura Documental ---
     include_header: bool = Field(
