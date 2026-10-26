@@ -54,4 +54,4 @@ if __name__ == "__main__":
     if "--no-browser" not in sys.argv:
         threading.Thread(target=open_browser_delayed, args=(url,), daemon=True).start()
 
-    uvicorn.run("tverbum.api:app", host="127.0.0.1", port=port, reload=False)
+    uvicorn.run("tverbum.api:app", host="127.0.0.1", port=port, reload=True)

@@ -175,8 +175,10 @@ async def get_session_by_id(minute_id: str):
     """
     Devolve o objeto MinuteOutput armazenado em memória no dicionário _MINUTES_STORE[minute_id],
     permitindo que sistemas externos (como tNuntia) consultem atas geradas anteriormente sem reprocessar.
+    Aceita 'latest' para obter a última sessão gerada.
     """
-    minute = _MINUTES_STORE.get(minute_id)
+    target_id = _LATEST_MINUTE_ID if minute_id == "latest" else minute_id
+    minute = _MINUTES_STORE.get(target_id) if target_id else None
     if not minute:
         raise HTTPException(status_code=404, detail="Sessão/Ata não encontrada para o minute_id informado.")
     return minute

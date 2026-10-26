@@ -220,6 +220,9 @@
         <div class="flex items-center gap-2">
           <span class="text-xs uppercase tracking-wider font-semibold text-slate-400">Componente &lt;tverbum-editor&gt;</span>
           <span id="badge_status" class="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 font-medium">Aguardando</span>
+          <button type="button" id="badge_session_id" onclick="copySessionId()" class="hidden text-xs px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 font-mono hover:bg-amber-500/20 transition" title="Clique para copiar o UUID da sessão para o tNuntia">
+            UUID: <span id="session_id_val"></span> 📋
+          </button>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
@@ -299,7 +302,15 @@ const ata = await res.json();
   <script>
     let presetsCache = [];
     let uploadedLogoDataUri = null;
+    window.lastSessionId = null;
     const editorEl = document.getElementById('main_editor');
+
+    function copySessionId() {
+      if (window.lastSessionId) {
+        navigator.clipboard.writeText(window.lastSessionId);
+        alert('UUID da Sessão copiado: ' + window.lastSessionId);
+      }
+    }
 
     window.addEventListener('DOMContentLoaded', async () => {
       try {
@@ -433,6 +444,13 @@ const ata = await res.json();
 
         const data = await response.json();
         editorEl.setMinute(data);
+
+        // Exibe o UUID da sessão para integração com tNuntia
+        if (data.id) {
+          window.lastSessionId = data.id;
+          document.getElementById('session_id_val').innerText = data.id.substring(0, 8) + '...';
+          document.getElementById('badge_session_id').classList.remove('hidden');
+        }
 
         document.getElementById('badge_status').innerText = 'Pronta para Revisão';
         document.getElementById('badge_status').className = 'text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-medium';

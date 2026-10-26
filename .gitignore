@@ -8,6 +8,8 @@ presets_data.json
 # Documentos de rascunho/planejamento interno e testes locais
 PLANEJAMENTO.md
 MELHORIAS_FUTURAS.md
+ANALISE_*.md
+PLANO_*.md
 tests/
 .pytest_cache/
 
