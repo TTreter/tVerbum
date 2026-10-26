@@ -27,6 +27,7 @@ O **tVerbum** foi projetado para se integrar facilmente aos seus sistemas web (e
   - **Parágrafo Único Contínuo (`single_paragraph`)** ou divisão exata em parágrafos temáticos (`paragraph_count`).
   - **Números, Horários e Datas por Extenso (`numbers_in_words`)**: Conversão precisa de horários (*"dezoito horas e sete minutos"*), datas (*"vinte e oito de setembro de dois mil e vinte e seis"*) e ordinais (*"10ª Legislatura"* → *"décima Legislatura"*), preservando numerações de leis (*"Projeto de Lei nº 48/2026"*).
   - **Conversão Financeira e Percentual**: Transforma valores (*"R$ 150.000,00"* → *"cento e cinquenta mil reais"*) e percentuais (*"10%"* → *"dez por cento"*).
+  - **Biblioteca Incremental e Fonética de Nomes (`NameLibraryManager`)**: Corrige automaticamente erros de grafia de nomes próprios causados pelo reconhecimento de voz (ex: *Thiago/Tiago*, *Luís/Luiz*, *Schneider/Esneider*, *Scherer/Xerer*), atuando antes da IA (na transcrição e no Whisper) e depois da IA (no corpo da ata, lista de presença e linha do tempo), com botão **"👤 Ensinar Nome"** direto no editor.
   - **Sanitização de Markdown**: Remove asteriscos, hashtags ou marcadores de listas que modelos menores de IA possam gerar, garantindo formato notarial limpo.
   - **Vedação a Abreviações (`allow_abbreviations=False`)**: Expande automaticamente *"Ver."* → *"Vereador"*, *"PL"* → *"Projeto de Lei"*, *"Art."* → *"Artigo"*.
 - **Controle de Taxa (Rate Limiting) e Cache SQLite Estendido**:
@@ -177,6 +178,10 @@ console.log(ata.extracted_data.voted_matters);    // [{ matter: "Projeto de Lei 
 | `POST` | `/api/export` | Exporta a ata para `.pdf`, `.docx`, `.txt` ou `.md` |
 | `GET` | `/api/presets` | Lista perfis institucionais cadastrados |
 | `POST` | `/api/presets` | Cadastra ou atualiza perfil institucional |
+| `GET` | `/api/names` | Lista nomes oficiais e variações da Biblioteca Incremental de Nomes |
+| `POST` | `/api/names` | Adiciona ou atualiza um nome oficial e seus apelidos fonéticos |
+| `POST` | `/api/names/quick-learn` | Ensina rapidamente um nome (`wrong_text` → `correct_name`) |
+| `DELETE`| `/api/names/{entry_id}` | Remove um registro da Biblioteca de Nomes |
 | `GET` | `/tverbum-editor.js` | Entrega o Web Component `<tverbum-editor>` standalone |
 | `DELETE`| `/api/cache` | Limpa o cache SQLite local |
 
