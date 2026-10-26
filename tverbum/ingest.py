@@ -1,20 +1,26 @@
 """
-Módulo de ingestão de conteúdo multimídia e metadados do YouTube (tVerbum).
-Inclui cache local SQLite para evitar extrações repetidas do mesmo vídeo.
+Módulo de ingestão de conteúdo multimídia e metadados do YouTube (tVerbum v2.0).
+Prioriza a ingestão frugal de texto (0 tokens multimídia) via legendas ou transcrição
+gratuita com Groq Whisper, evitando estouro de cotas nas camadas gratuitas de IA.
+Inclui cache local SQLite para evitar reprocessamentos.
 """
 
 import re
 import os
 import tempfile
+import logging
 from typing import Optional, Tuple, Dict, Any
 from youtube_transcript_api import YouTubeTranscriptApi
 import yt_dlp
 
 from .cache import VideoCache
+from .transcriber import GroqWhisperTranscriber
+
+logger = logging.getLogger("tverbum.ingest")
 
 
 class ContentIngestor:
-    """Extrai metadados, transcrições e áudios de links do YouTube com suporte a cache local."""
+    """Extrai metadados, transcrições e áudios de links do YouTube com suporte a cache local e Whisper."""
 
     @staticmethod
     def extract_video_id(url: str) -> Optional[str]:
@@ -41,7 +47,7 @@ class ContentIngestor:
 
     @classmethod
     def get_canonical_youtube_url(cls, url_or_id: str) -> str:
-        """Retorna a URL canônica do YouTube (necessária para Part.from_uri no Gemini)."""
+        """Retorna a URL canônica do YouTube."""
         vid = cls.extract_video_id(url_or_id)
         if vid:
             return f"https://www.youtube.com/watch?v={vid}"
@@ -75,15 +81,15 @@ class ContentIngestor:
                     description = info.get("description", "")
                     if description:
                         meta["video_description"] = description[:3000]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Não foi possível extrair metadados completos do vídeo via yt-dlp: {e}")
         return meta
 
     @classmethod
     def get_transcript_text(cls, video_id: str) -> Optional[str]:
         """
         Tenta obter as legendas oficiais ou automáticas em português via youtube-transcript-api.
-        Retorna o texto com marcações temporais aproximadas.
+        Retorna o texto com marcações temporais aproximadas [HH:MM:SS].
         """
         try:
             api = YouTubeTranscriptApi()
@@ -119,16 +125,27 @@ class ContentIngestor:
             return None
 
     @classmethod
-    def download_audio_stream(cls, video_url: str, output_dir: Optional[str] = None) -> Optional[str]:
+    def download_audio_stream(
+        cls,
+        video_url: str,
+        output_dir: Optional[str] = None,
+        prefer_low_bitrate: bool = True,
+    ) -> Optional[str]:
         """
-        Baixa o stream de áudio do vídeo sem necessidade de recodificação (ffmpeg).
-        Usa o formato nativo m4a/opus de menor tamanho para processamento rápido pela IA.
+        Baixa o stream de áudio nativo do vídeo sem necessidade de recodificação externa com ffmpeg.
+        Utiliza bitrates econômicos (48k-64k) para manter o arquivo bem abaixo do limite de 25MB.
         """
         if not output_dir:
             output_dir = tempfile.gettempdir()
 
+        format_str = (
+            "ba[abr<=48]/ba[abr<=64]/worstaudio[ext=m4a]/worstaudio[ext=webm]/worstaudio/bestaudio[ext=m4a]/bestaudio/best"
+            if prefer_low_bitrate
+            else "bestaudio[ext=m4a]/bestaudio/best"
+        )
+
         ydl_opts = {
-            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "format": format_str,
             "outtmpl": os.path.join(output_dir, "tverbum_%(id)s.%(ext)s"),
             "quiet": True,
             "no_warnings": True,
@@ -141,7 +158,8 @@ class ContentIngestor:
                 filename = ydl.prepare_filename(info)
                 if os.path.exists(filename):
                     return filename
-        except Exception:
+        except Exception as e:
+            logger.error(f"Falha ao baixar áudio via yt-dlp: {e}")
             return None
 
     @classmethod
@@ -152,7 +170,8 @@ class ContentIngestor:
         bypass_cache: bool = False,
     ) -> Tuple[str, str, Dict[str, Any]]:
         """
-        Ingere o vídeo selecionando a estratégia configurada e utilizando cache SQLite local.
+        Ingere o vídeo selecionando a estratégia mais frugal e utilizando cache SQLite local.
+        No modo 'auto', prioriza legendas nativas e, na ausência delas, transcreve o áudio via Groq Whisper.
         """
         video_id = cls.extract_video_id(video_url)
         if not video_id:
@@ -188,12 +207,34 @@ class ContentIngestor:
             yt_meta = cls.extract_video_metadata(canonical_url)
             metadata.update(yt_meta)
 
-        # Busca transcrição de legendas se ainda não estiver em cache
+        # 1. Busca transcrição de legendas se ainda não estiver em cache
         transcript = cached.get("transcript") if cached else cls.get_transcript_text(video_id)
-        if not cached:
+
+        # 2. Se não houver legendas no YouTube, tenta gerar transcrição frugal via Groq Whisper
+        if not transcript and mode_preference in ("auto", "captions"):
+            whisper = GroqWhisperTranscriber()
+            if whisper.is_available():
+                logger.info(f"Vídeo {video_id} não possui legendas no YouTube. Iniciando transcrição gratuita via Groq Whisper...")
+                audio_file = cls.download_audio_stream(canonical_url)
+                if audio_file:
+                    try:
+                        whisper_text = whisper.transcribe(audio_file)
+                        if whisper_text and len(whisper_text.strip()) > 100:
+                            transcript = whisper_text
+                            metadata["method"] = "groq_whisper_transcription"
+                            metadata["length_chars"] = len(transcript)
+                    finally:
+                        if os.path.exists(audio_file):
+                            try:
+                                os.remove(audio_file)
+                            except Exception:
+                                pass
+
+        # Salva a transcrição no cache SQLite para nunca reprocessar
+        if not cached and transcript:
             VideoCache.set(video_id, transcript, metadata)
 
-        # Modo 1: YouTube Direct explícito
+        # Modo 1: YouTube Direct explícito solicitado pelo usuário
         if mode_preference == "youtube_direct":
             if transcript:
                 metadata["auxiliary_captions"] = transcript
@@ -203,25 +244,31 @@ class ContentIngestor:
         # Modo 2: Apenas Legendas explícito
         if mode_preference == "captions":
             if transcript and len(transcript.strip()) > 50:
-                metadata["method"] = "youtube_captions"
+                if "method" not in metadata:
+                    metadata["method"] = "youtube_captions"
                 metadata["length_chars"] = len(transcript)
                 return ("captions", transcript, metadata)
-            raise RuntimeError("Este vídeo não possui legendas disponíveis no YouTube. Use o modo 'auto' ou 'youtube_direct'.")
+            raise RuntimeError(
+                "Este vídeo não possui legendas nativas no YouTube e não foi possível transcrevê-lo. "
+                "Defina GROQ_API_KEY para habilitar a transcrição automática gratuita via Whisper ou use 'youtube_direct'."
+            )
 
         # Modo 3: Download de Áudio explícito
         if mode_preference == "audio":
-            audio_path = cls.download_audio_stream(canonical_url)
+            audio_path = cls.download_audio_stream(canonical_url, prefer_low_bitrate=False)
             if audio_path and os.path.exists(audio_path):
                 metadata["method"] = "audio_download"
                 metadata["audio_file"] = audio_path
                 return ("audio", audio_path, metadata)
             raise RuntimeError("Não foi possível baixar o stream de áudio do vídeo informado.")
 
-        # Modo 4: Automático Inteligente ('auto')
+        # Modo 4: Automático Inteligente ('auto') - Sempre frugal
         if transcript and len(transcript.strip()) > 100:
-            metadata["method"] = "youtube_captions_plus_meta"
+            if "method" not in metadata:
+                metadata["method"] = "youtube_captions_plus_meta"
             metadata["length_chars"] = len(transcript)
             return ("captions", transcript, metadata)
 
+        # Se tudo falhar e nenhum texto tiver sido obtido, recorre ao YouTube Direct multimodal
         metadata["method"] = "youtube_direct_multimodal"
         return ("youtube_direct", canonical_url, metadata)
