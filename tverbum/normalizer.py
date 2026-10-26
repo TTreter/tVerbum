@@ -1,5 +1,6 @@
 """
-Normalizador determinístico de texto, validador (linter) cartorial e regras estilísticas formais para atas (tVerbum).
+Normalizador determinístico de texto, validador (linter) cartorial e regras estilísticas formais para atas (tVerbum v2.0).
+Inclui sanitização de markdown, conversão de moedas, percentuais, ordinais e numerais para extenso.
 """
 
 import re
@@ -47,6 +48,36 @@ class TextNormalizer:
         21: "vinte e uma",
         22: "vinte e duas",
     }
+
+    @classmethod
+    def sanitize_markdown_artifacts(cls, text: str) -> str:
+        """
+        Sanitiza marcadores de formatação Markdown (#, **, *, __, _, -, •)
+        que modelos de linguagem menores possam inadvertidamente incluir no corpo da ata.
+        """
+        if not text:
+            return ""
+
+        # Remove blocos de código
+        text = re.sub(r"```[a-zA-Z]*\n?([\s\S]*?)```", r"\1", text)
+        text = re.sub(r"`([^`]+)`", r"\1", text)
+
+        # Remove marcadores de cabeçalho Markdown (#, ##, ###) no início da linha
+        text = re.sub(r"(?m)^#{1,6}\s*", "", text)
+
+        # Remove negrito e itálico (**texto**, *texto*, __texto__)
+        text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+        text = re.sub(r"\*([^*]+)\*", r"\1", text)
+        text = re.sub(r"__([^_]+)__", r"\1", text)
+        text = re.sub(r"(?<!\w)_([^_]+)_(?!\w)", r"\1", text)
+
+        # Remove marcadores de citação (> texto)
+        text = re.sub(r"(?m)^>\s*", "", text)
+
+        # Remove marcadores de lista não ordenada (- item, * item, • item)
+        text = re.sub(r"(?m)^\s*[-*•]\s+", "", text)
+
+        return text
 
     @classmethod
     def expand_abbreviations(cls, text: str) -> str:
@@ -139,11 +170,75 @@ class TextNormalizer:
             return f"Aos {day} dias do mês {month} de {year}"
 
     @classmethod
+    def apply_currency_in_words(cls, text: str) -> str:
+        """
+        Converte valores monetários em algarismos (ex: 'R$ 150.000,00', 'R$ 1,50') para extenso.
+        """
+        def _replace_currency(match: re.Match) -> str:
+            raw_int = match.group(1).replace(".", "")
+            val_int = int(raw_int)
+            raw_cent = match.group(2)
+            val_cent = int(raw_cent) if raw_cent else 0
+
+            parts = []
+            if val_int > 0:
+                words_int = num2words(val_int, lang="pt_BR")
+                unit = "real" if val_int == 1 else "reais"
+                parts.append(f"{words_int} {unit}")
+
+            if val_cent > 0:
+                words_cent = num2words(val_cent, lang="pt_BR")
+                unit_cent = "centavo" if val_cent == 1 else "centavos"
+                parts.append(f"{words_cent} {unit_cent}")
+
+            if not parts:
+                return "zero real"
+            return " e ".join(parts)
+
+        return re.sub(r"\bR\$\s*(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d{2}))?\b", _replace_currency, text)
+
+    @classmethod
+    def apply_percentages_in_words(cls, text: str) -> str:
+        """
+        Converte percentuais (ex: '10%', '5,5%') para extenso.
+        """
+        def _replace_percent(match: re.Match) -> str:
+            val_int = int(match.group(1))
+            raw_dec = match.group(2)
+            words_int = num2words(val_int, lang="pt_BR")
+            if raw_dec:
+                val_dec = int(raw_dec)
+                words_dec = num2words(val_dec, lang="pt_BR")
+                return f"{words_int} vírgula {words_dec} por cento"
+            return f"{words_int} por cento"
+
+        return re.sub(r"\b(\d+)(?:,(\d+))?\s*%", _replace_percent, text)
+
+    @classmethod
+    def apply_ordinals_in_words(cls, text: str) -> str:
+        """
+        Converte ordinais cardinais (ex: '1º Secretário', '10ª Legislatura', '40ª Sessão') para extenso,
+        preservando números de Leis, Ofícios e Projetos ('nº 48/2026').
+        """
+        def _replace_ordinal(match: re.Match) -> str:
+            num = int(match.group(1))
+            gender_symbol = match.group(2)
+            is_feminine = gender_symbol == "ª"
+
+            ord_m = num2words(num, to="ordinal", lang="pt_BR")
+            if is_feminine:
+                ord_res = " ".join(w[:-1] + "a" if w.endswith(("o", "os")) else w for w in ord_m.split())
+                return ord_res
+            return ord_m
+
+        pattern = r"(?<!nº\s)(?<!n°\s)(?<!n\.\s)(?<!n\.º\s)(?<!n\.°\s)\b(\d{1,3})\s*([ºª°])\b"
+        return re.sub(pattern, _replace_ordinal, text, flags=re.IGNORECASE)
+
+    @classmethod
     def apply_numbers_in_words(cls, text: str) -> str:
         """
-        Pós-processador determinístico que converte horários (ex: '18h07', '18:07', '18h', '18 horas')
-        e datas em barra ('28/09/2026') que porventura tenham escapado em algarismos para extenso,
-        preservando números de Leis, Ofícios e Projetos ('nº 48/2026').
+        Pós-processador determinístico que converte horários, datas, moedas, percentuais e ordinais
+        para a forma formal por extenso, preservando números de proposições legislativas ('nº 48/2026').
         """
         # 1. Horários no formato 18h07, 18h07min, 18:07
         def _replace_time_hm(match: re.Match) -> str:
@@ -164,7 +259,16 @@ class TextNormalizer:
 
         text = re.sub(r"\b([01]?\d|2[0-3])\s*(?:h\b|horas\b)", _replace_time_h, text)
 
-        # 3. Datas no formato DD/MM/AAAA (não precedidas por 'nº')
+        # 3. Moedas financeiras: 'R$ 150.000,00' -> 'cento e cinquenta mil reais'
+        text = cls.apply_currency_in_words(text)
+
+        # 4. Percentuais: '10%' -> 'dez por cento'
+        text = cls.apply_percentages_in_words(text)
+
+        # 5. Ordinais: '10ª Legislatura' -> 'décima Legislatura'
+        text = cls.apply_ordinals_in_words(text)
+
+        # 6. Datas no formato DD/MM/AAAA (não precedidas por 'nº')
         def _replace_date_slash(match: re.Match) -> str:
             d, m, y = int(match.group(1)), int(match.group(2)), int(match.group(3))
             if 1 <= d <= 31 and 1 <= m <= 12 and 1900 <= y <= 2100:
@@ -173,7 +277,7 @@ class TextNormalizer:
 
         text = re.sub(r"(?<!nº\s)(?<!n\.º\s)\b(0?[1-9]|[12]\d|3[01])/(0?[1-9]|1[0-2])/(\d{4})\b", _replace_date_slash, text)
 
-        # 4. Datas parciais 'dia 13 de outubro de 2026' -> 'dia treze de outubro de dois mil e vinte e seis'
+        # 7. Datas parciais 'dia 13 de outubro de 2026' -> 'dia treze de outubro de dois mil e vinte e seis'
         months_pattern = "|".join(cls.MONTHS.values())
 
         def _replace_written_date(match: re.Match) -> str:
@@ -204,24 +308,34 @@ class TextNormalizer:
         allow_abbreviations: bool = False,
     ) -> Tuple[str, List[str]]:
         """
-        Valida o texto (ex: após edição manual do usuário) e aplica as correções cartoriais,
-        retornando (texto_normalizado, lista_de_correcoes_aplicadas).
+        Valida o texto (ex: após edição manual do usuário ou geração por modelo menor),
+        aplica a sanitização de markdown e correções cartoriais determinísticas.
+        Retorna (texto_normalizado, lista_de_correcoes_aplicadas).
         """
         current = text.strip()
         corrections: List[str] = []
 
+        # 1. Sanitização de artefatos de Markdown
+        sanitized = cls.sanitize_markdown_artifacts(current)
+        if sanitized != current:
+            corrections.append("Marcadores e formatações de markdown foram sanitizados.")
+            current = sanitized
+
+        # 2. Expansão de abreviações
         if not allow_abbreviations:
             expanded = cls.expand_abbreviations(current)
             if expanded != current:
                 corrections.append("Abreviações (como Ver., PL, Art., Of.) foram expandidas para sua forma por extenso.")
                 current = expanded
 
+        # 3. Conversão de números para extenso (horários, datas, moedas, percentuais, ordinais)
         if numbers_in_words:
             with_words = cls.apply_numbers_in_words(current)
             if with_words != current:
-                corrections.append("Horários e datas em algarismos foram convertidos para extenso.")
+                corrections.append("Números, horários, datas, valores monetários e percentuais foram convertidos para extenso.")
                 current = with_words
 
+        # 4. Ajuste na estrutura de parágrafos
         target_paras = 1 if single_paragraph else max(1, paragraph_count)
         formatted_paras = cls.enforce_paragraph_count(current, target_count=target_paras)
         if formatted_paras != current:
