@@ -26,6 +26,9 @@ from .models import (
     RefineSnippetRequest,
     RefineSnippetResponse,
     GenerationJob,
+    SaplConnectionRequest,
+    SaplSyncNamesRequest,
+    SaplFetchSessionRequest,
 )
 from .ai_engine import MinuteGenerator
 from .normalizer import TextNormalizer
@@ -34,6 +37,7 @@ from .presets import PresetManager
 from .name_library import NameLibraryManager
 from .cache import VideoCache
 from .limiter import RateLimiter
+from .sapl_client import SaplClient
 
 app = FastAPI(
     title="tVerbum API",
@@ -215,6 +219,58 @@ async def delete_name_entry(entry_id: str):
     if not removed:
         raise HTTPException(status_code=404, detail="Registro não encontrado na Biblioteca de Nomes.")
     return {"status": "ok", "deleted_id": entry_id}
+
+
+# =============================================================================
+# Rotas de Integração com o SAPL (Interlegis / Senado Federal)
+# =============================================================================
+
+
+@app.post("/api/sapl/test")
+async def test_sapl_connection(request: SaplConnectionRequest):
+    """Testa se a URL da Câmara Municipal possui a API REST do SAPL ativa e comunicável."""
+    client = SaplClient(request.base_url)
+    return client.test_connection()
+
+
+@app.post("/api/sapl/sync-names")
+async def sync_sapl_names(request: SaplSyncNamesRequest):
+    """
+    Importa os nomes de todos os vereadores cadastrados no SAPL da Câmara e
+    adiciona/atualiza na Biblioteca Incremental de Nomes do tVerbum automaticamente.
+    """
+    client = SaplClient(request.base_url)
+    synced = client.sync_names_to_library(preset_id=request.preset_id)
+    return {
+        "status": "ok",
+        "synced_count": len(synced),
+        "entries": synced,
+        "message": f"{len(synced)} nomes de parlamentares sincronizados com a Biblioteca de Nomes.",
+    }
+
+
+@app.post("/api/sapl/fetch-session")
+async def fetch_sapl_session(request: SaplFetchSessionRequest):
+    """
+    Importa todos os dados oficiais da sessão a partir da API do SAPL:
+    - Data, horário e link do vídeo da transmissão;
+    - Presidente e Secretário da sessão;
+    - Pauta oficial completa da Ordem do Dia (para ancorar a IA sem alucinações de leis);
+    - Vereadores em exercício.
+    """
+    client = SaplClient(request.base_url)
+    try:
+        data = client.fetch_full_session_context(
+            session_identifier=request.session_number,
+            year=request.year,
+            sync_names=request.sync_names,
+            preset_id=request.preset_id,
+        )
+        return data
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao consultar o SAPL: {str(e)}")
 
 
 @app.get("/api/transcription/{video_id}")

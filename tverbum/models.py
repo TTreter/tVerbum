@@ -400,3 +400,26 @@ class GenerationJob(BaseModel):
     error_message: Optional[str] = Field(default=None, description="Mensagem de erro caso o job falhe")
     created_at: float = Field(default=0.0)
     updated_at: float = Field(default=0.0)
+
+
+class SaplConnectionRequest(BaseModel):
+    """Requisição para testar conectividade com a API REST de uma Câmara Municipal (SAPL)."""
+
+    base_url: str = Field(..., description="URL base do SAPL (ex: 'https://sapl.coronelbarros.rs.leg.br')")
+
+
+class SaplSyncNamesRequest(BaseModel):
+    """Requisição para sincronizar parlamentares do SAPL para a Biblioteca de Nomes do tVerbum."""
+
+    base_url: str = Field(..., description="URL base do SAPL")
+    preset_id: Optional[str] = Field(default=None, description="ID do perfil opcional para vincular os nomes")
+
+
+class SaplFetchSessionRequest(BaseModel):
+    """Requisição para importar todos os metadados de uma sessão do SAPL."""
+
+    base_url: str = Field(..., description="URL base do SAPL")
+    session_number: str = Field(..., description="Identificação da sessão (ex: '24/2026' ou '24')")
+    year: Optional[int] = Field(default=None, description="Ano da sessão (opcional se informado no session_number)")
+    preset_id: Optional[str] = Field(default=None, description="ID do perfil opcional")
+    sync_names: bool = Field(default=True, description="Se True, sincroniza os nomes dos vereadores na biblioteca")

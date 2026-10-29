@@ -29,6 +29,9 @@
         </div>
       </div>
       <div class="flex items-center space-x-3 text-sm text-slate-400">
+        <button type="button" onclick="toggleSaplModal()" class="text-xs px-3 py-1.5 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 font-medium transition flex items-center gap-1.5">
+          <span>🏛️ Importar do SAPL</span>
+        </button>
         <button type="button" onclick="toggleNamesModal()" class="text-xs px-3 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-medium transition flex items-center gap-1.5">
           <span>👤 Biblioteca de Nomes</span>
         </button>
@@ -358,6 +361,48 @@ const ata = await res.json();
     </div>
   </div>
 
+  <!-- Modal: SAPL Interlegis Integration -->
+  <div id="sapl_modal" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-950 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 space-y-4 max-h-[85vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div>
+          <h3 class="text-base font-bold text-white flex items-center gap-2">🏛️ Importar Dados do SAPL (Interlegis)</h3>
+          <p class="text-xs text-slate-400 mt-0.5">Importe vereadores, Mesa Diretora e Ordem do Dia diretamente do SAPL da sua Câmara.</p>
+        </div>
+        <button type="button" onclick="toggleSaplModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="block text-xs text-slate-300 font-medium">URL do SAPL da Câmara Municipal *</label>
+            <button type="button" onclick="document.getElementById('sapl_input_url').value = 'https://sapl.coronelbarros.rs.leg.br'" class="text-[11px] text-sky-400 hover:underline">
+              Usar Exemplo (Coronel Barros/RS)
+            </button>
+          </div>
+          <input type="text" id="sapl_input_url" placeholder="https://sapl.suacamara.leg.br" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-2 text-xs text-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-slate-300 font-medium mb-1">Número e Ano da Sessão *</label>
+            <input type="text" id="sapl_input_session" placeholder="ex: 24/2026 ou 24" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3.5 py-2 text-xs text-white focus:ring-2 focus:ring-sky-500 focus:outline-none">
+          </div>
+          <div class="flex items-end gap-2">
+            <button type="button" onclick="testSaplConnection()" id="btn_sapl_test" class="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 border border-slate-700 text-xs font-medium transition">
+              ⚡ Testar Conexão
+            </button>
+            <button type="button" onclick="syncSaplSessionData()" id="btn_sapl_import" class="flex-1 px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow-lg shadow-sky-600/20 transition">
+              📥 Importar Dados
+            </button>
+          </div>
+        </div>
+
+        <div id="sapl_feedback" class="hidden p-3 rounded-lg border text-xs"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal: Incremental Name Library Manager -->
   <div id="names_modal" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
     <div class="bg-slate-950 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 space-y-4 max-h-[85vh] overflow-y-auto">
@@ -423,6 +468,83 @@ const ata = await res.json();
       if (window.lastSessionId) {
         navigator.clipboard.writeText(window.lastSessionId);
         alert('UUID da Sessão copiado: ' + window.lastSessionId);
+      }
+    }
+
+    function toggleSaplModal() {
+      const el = document.getElementById('sapl_modal');
+      el.classList.toggle('hidden');
+    }
+
+    async function testSaplConnection() {
+      const url = document.getElementById('sapl_input_url').value.trim();
+      const fb = document.getElementById('sapl_feedback');
+      if (!url) { alert('Digite a URL do SAPL da Câmara.'); return; }
+      fb.className = 'p-3 rounded-lg border text-xs bg-slate-900 border-slate-700 text-slate-300';
+      fb.innerText = 'Testando conexão com a API do SAPL...';
+      fb.classList.remove('hidden');
+
+      try {
+        const res = await fetch('/api/sapl/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base_url: url })
+        });
+        const data = await res.json();
+        if (data.online) {
+          fb.className = 'p-3 rounded-lg border text-xs bg-emerald-500/10 border-emerald-500/30 text-emerald-300';
+          fb.innerText = '✓ ' + data.message + ' (' + data.endpoints_count + ' recursos disponíveis)';
+        } else {
+          fb.className = 'p-3 rounded-lg border text-xs bg-red-500/10 border-red-500/30 text-red-300';
+          fb.innerText = '❌ ' + (data.error || 'Falha ao conectar com o SAPL.');
+        }
+      } catch (err) {
+        fb.className = 'p-3 rounded-lg border text-xs bg-red-500/10 border-red-500/30 text-red-300';
+        fb.innerText = '❌ ' + err.message;
+      }
+    }
+
+    async function syncSaplSessionData() {
+      const url = document.getElementById('sapl_input_url').value.trim();
+      const sessionNum = document.getElementById('sapl_input_session').value.trim();
+      const fb = document.getElementById('sapl_feedback');
+      if (!url || !sessionNum) { alert('Preencha a URL do SAPL e o número da sessão.'); return; }
+
+      fb.className = 'p-3 rounded-lg border text-xs bg-sky-500/10 border-sky-500/30 text-sky-300 animate-pulse';
+      fb.innerText = 'Importando pauta e dados oficiais da sessão do SAPL...';
+      fb.classList.remove('hidden');
+
+      try {
+        const res = await fetch('/api/sapl/fetch-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base_url: url, session_number: sessionNum, sync_names: true })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || 'Erro ao sincronizar dados com o SAPL.');
+        }
+        const data = await res.json();
+
+        // Autopreenchimento no formulário principal
+        if (data.session_number) document.getElementById('session_number').value = data.session_number;
+        if (data.president_name) document.getElementById('president_name').value = data.president_name;
+        if (data.secretary_name) document.getElementById('secretary_name').value = data.secretary_name;
+        if (data.agenda_context) document.getElementById('agenda_context').value = data.agenda_context;
+        if (data.video_url && !document.getElementById('video_url').value) {
+          document.getElementById('video_url').value = data.video_url;
+        }
+        if (data.session_type) {
+          document.getElementById('session_type').value = data.session_type;
+        }
+
+        fb.className = 'p-3 rounded-lg border text-xs bg-emerald-500/10 border-emerald-500/30 text-emerald-300';
+        fb.innerText = `✓ Dados importados com sucesso! ${data.voted_matters_count} matérias da Ordem do Dia e ${data.known_attendees.length} parlamentares sincronizados.`;
+
+        setTimeout(() => { toggleSaplModal(); }, 2000);
+      } catch (err) {
+        fb.className = 'p-3 rounded-lg border text-xs bg-red-500/10 border-red-500/30 text-red-300';
+        fb.innerText = '❌ ' + err.message;
       }
     }
 
