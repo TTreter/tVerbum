@@ -202,8 +202,15 @@
         </div>
 
         <div>
-          <label class="block text-xs font-medium text-slate-400 mb-1">Pauta / Ordem do Dia / Ofícios da Sessão (Opcional)</label>
+          <div class="flex items-center justify-between mb-1">
+            <label class="block text-xs font-medium text-slate-400">Pauta / Ordem do Dia / Ofícios da Sessão (Opcional)</label>
+            <label class="text-[11px] text-amber-400 hover:underline cursor-pointer flex items-center gap-1">
+              <span>📄 Carregar PDF / Word da Pauta</span>
+              <input type="file" id="agenda_file_input" accept=".pdf,.docx,.doc" class="hidden" onchange="handleAgendaFileUpload(this)">
+            </label>
+          </div>
           <textarea id="agenda_context" rows="2" placeholder="Cole aqui Projetos de Lei, Indicações ou Ofícios do dia para ancoragem exata..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:ring-2 focus:ring-amber-500 focus:outline-none"></textarea>
+          <div id="agenda_file_status" class="text-[11px] text-slate-400 mt-1 truncate"></div>
         </div>
       </div>
 
@@ -570,6 +577,35 @@ const ata = await res.json();
         const data = await res.json();
         document.getElementById('video_url').value = data.file_path;
         statusEl.innerText = '✓ ' + data.filename + ' (' + data.size_mb + 'MB pronto)';
+        statusEl.className = 'text-[11px] text-emerald-400 truncate';
+      } catch (err) {
+        statusEl.innerText = '❌ ' + err.message;
+        statusEl.className = 'text-[11px] text-red-400 truncate';
+      }
+    }
+
+    async function handleAgendaFileUpload(input) {
+      const file = input.files[0];
+      if (!file) return;
+      const statusEl = document.getElementById('agenda_file_status');
+      statusEl.innerText = 'Processando ' + file.name + '...';
+      statusEl.className = 'text-[11px] text-amber-400 truncate animate-pulse';
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const res = await fetch('/api/agenda/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || 'Erro ao processar arquivo da pauta.');
+        }
+        const data = await res.json();
+        document.getElementById('agenda_context').value = data.formatted_context;
+        statusEl.innerText = `✓ ${data.matters_count} matérias extraídas com sucesso!`;
         statusEl.className = 'text-[11px] text-emerald-400 truncate';
       } catch (err) {
         statusEl.innerText = '❌ ' + err.message;

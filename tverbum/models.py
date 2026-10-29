@@ -423,3 +423,18 @@ class SaplFetchSessionRequest(BaseModel):
     year: Optional[int] = Field(default=None, description="Ano da sessão (opcional se informado no session_number)")
     preset_id: Optional[str] = Field(default=None, description="ID do perfil opcional")
     sync_names: bool = Field(default=True, description="Se True, sincroniza os nomes dos vereadores na biblioteca")
+
+
+class AgendaExtractRequest(BaseModel):
+    """Requisição com texto colado para extração determinística de pauta/ordem do dia."""
+
+    text: str = Field(..., description="Texto da pauta ou ordem do dia")
+
+
+class AgendaExtractResponse(BaseModel):
+    """Resposta com as proposições extraídas e formatadas para ancoragem da IA."""
+
+    status: str = "ok"
+    matters_count: int
+    matters: List[VotedMatter] = Field(default_factory=list)
+    formatted_context: str

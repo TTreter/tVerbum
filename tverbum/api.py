@@ -29,6 +29,9 @@ from .models import (
     SaplConnectionRequest,
     SaplSyncNamesRequest,
     SaplFetchSessionRequest,
+    AgendaExtractRequest,
+    AgendaExtractResponse,
+    VotedMatter,
 )
 from .ai_engine import MinuteGenerator
 from .normalizer import TextNormalizer
@@ -38,6 +41,7 @@ from .name_library import NameLibraryManager
 from .cache import VideoCache
 from .limiter import RateLimiter
 from .sapl_client import SaplClient
+from .agenda_parser import AgendaParser
 
 app = FastAPI(
     title="tVerbum API",
@@ -271,6 +275,74 @@ async def fetch_sapl_session(request: SaplFetchSessionRequest):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao consultar o SAPL: {str(e)}")
+
+
+# =============================================================================
+# Rotas de Extração e Análise de Pauta / Ordem do Dia (PDF, Word e Texto)
+# =============================================================================
+
+
+@app.post("/api/agenda/extract", response_model=AgendaExtractResponse)
+async def extract_agenda_from_text(request: AgendaExtractRequest):
+    """
+    Analisa um texto colado de pauta / ordem do dia e extrai proposições legislativas,
+    autores e ementas para ancoragem do modelo de IA.
+    """
+    raw_matters = AgendaParser.parse_propositions_from_text(request.text)
+    matters = [
+        VotedMatter(
+            matter=m["matter"],
+            author=m.get("author", ""),
+            summary=m.get("summary", ""),
+            result="Em pauta",
+        )
+        for m in raw_matters
+    ]
+    formatted = AgendaParser.format_agenda_context(raw_matters)
+    return AgendaExtractResponse(
+        status="ok",
+        matters_count=len(matters),
+        matters=matters,
+        formatted_context=formatted,
+    )
+
+
+@app.post("/api/agenda/upload", response_model=AgendaExtractResponse)
+async def extract_agenda_from_file(file: UploadFile = File(...)):
+    """
+    Recebe um arquivo PDF (.pdf) ou Word (.docx) contendo a Ordem do Dia / Pauta oficial,
+    lê seu conteúdo e extrai deterministicamente todas as matérias legislativas.
+    """
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in (".pdf", ".docx", ".doc"):
+        raise HTTPException(status_code=400, detail="Envie um arquivo PDF (.pdf) ou Word (.docx).")
+
+    content_bytes = await file.read()
+    if len(content_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+
+    if ext == ".pdf":
+        text = AgendaParser.extract_text_from_pdf(content_bytes)
+    else:
+        text = AgendaParser.extract_text_from_docx(content_bytes)
+
+    raw_matters = AgendaParser.parse_propositions_from_text(text)
+    matters = [
+        VotedMatter(
+            matter=m["matter"],
+            author=m.get("author", ""),
+            summary=m.get("summary", ""),
+            result="Em pauta",
+        )
+        for m in raw_matters
+    ]
+    formatted = AgendaParser.format_agenda_context(raw_matters)
+    return AgendaExtractResponse(
+        status="ok",
+        matters_count=len(matters),
+        matters=matters,
+        formatted_context=formatted,
+    )
 
 
 @app.get("/api/transcription/{video_id}")

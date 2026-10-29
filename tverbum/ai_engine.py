@@ -137,6 +137,15 @@ EXEMPLO DE REFERÊNCIA DE QUALIDADE E ESTILO ESPERADO PARA O CAMPO 'body':
 "Aos vinte e oito dias de setembro de dois mil e vinte e seis, reuniram-se nas dependências da Câmara Municipal de Vereadores de Exemplo os integrantes da 10ª Legislatura para a realização da Sessão Plenária Ordinária de número quarenta. Havendo quórum regimental e, invocando a proteção de Deus, o Senhor Presidente Carlos Eduardo da Silva declarou aberta a sessão as dezoito horas e sete minutos. Na sequência, o Senhor Secretário realizou a primeira chamada, a qual acusou a presença dos vereadores: Carlos Eduardo da Silva e Ana Paula Oliveira (PARTIDO A); Marcos Vinícius Santos e Helena Costa Ferreira (PARTIDO B); e Roberto Almeida Souza (PARTIDO C). Em seguida, procedeu-se à leitura da mensagem do dia, sendo conduzida a oração do "Pai Nosso". Logo após, foram lidas as correspondências, destacando-se o Ofício Circular nº 46/2026 do Tribunal de Contas e o Ofício nº 134/2026 do Executivo, encaminhando o Projeto de Lei nº 49/2026. A Presidência informou que a Ata nº 20 foi enviada previamente aos vereadores e considerada tacitamente aprovada. No espaço do pequeno expediente, três vereadores fizeram uso da palavra... Ingressando na ordem do dia, foi apreciado o Projeto de Lei nº 48/2026... Após a leitura dos pareceres favoráveis das comissões, o projeto foi colocado em votação e aprovado por unanimidade... Esgotadas as matérias, a sessão foi encerrada as dezenove horas e dezoito minutos, sendo a próxima sessão ordinária convocada para o dia treze de outubro de dois mil e vinte e seis (terça-feira), às dezoito horas."
 """
 
+        agenda_rule = ""
+        if getattr(config, "agenda_context", None):
+            agenda_rule = (
+                "\n7. FIDELIDADE ESTATUTÁRIA À PAUTA OFICIAL: O usuário forneceu a PAUTA OFICIAL / ORDEM DO DIA. "
+                "Utilize RIGOROSAMENTE os números e descrições de Projetos de Lei, Requerimentos e Ofícios indicados na pauta. "
+                "NÃO invente e NÃO altere nenhum número ou ano de proposição. Atue como classificador identificando o resultado "
+                "(Aprovado, Rejeitado, etc.) de cada matéria da pauta com base no áudio da sessão."
+            )
+
         prompt = f"""Você é um redator oficial e consultor legislativo sênior especializado na confecção de atas institucionais e parlamentares brasileiras.
 Sua missão é analisar a sessão fornecida e retornar um objeto JSON estruturado contendo:
 1. 'body': O texto formal completo do corpo da ata (sem cabeçalho institucional e sem linhas de assinatura).
@@ -159,6 +168,7 @@ DIRETRIZES FUNDAMENTAIS DE REDAÇÃO DO CAMPO 'body':
    - Ordem do Dia: Matérias apreciadas e votadas (Projetos de Lei, pareceres das comissões, resultado da votação como 'aprovado por unanimidade'), seguidas da leitura das demais matérias encaminhadas às comissões ou apresentadas (Projetos de Lei, Indicações, Pedidos de Providência, Pedidos de Informação com seus respectivos números e autores).
    - Explicações Pessoais: Manifestações finais dos vereadores que fizeram uso da palavra.
    - Encerramento: Declaração de encerramento com horário por extenso e convocação para a próxima sessão.
+{agenda_rule}
 {example_section}"""
         return prompt
 
