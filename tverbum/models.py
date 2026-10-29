@@ -323,7 +323,7 @@ class MinuteOutput(BaseModel):
 class ExportRequest(BaseModel):
     """Payload enviado à rota `/api/export` para converter uma ata (mesmo após edição na tela) em arquivo físico."""
 
-    format: Literal["docx", "pdf", "txt", "md"] = Field(default="docx")
+    format: Literal["docx", "pdf", "txt", "md", "lexml", "xml", "gazette", "diario"] = Field(default="docx")
     minute: MinuteOutput
 
 
@@ -490,3 +490,58 @@ class AgendaExtractResponse(BaseModel):
     matters_count: int
     matters: List[VotedMatter] = Field(default_factory=list)
     formatted_context: str
+
+
+class NewsReleaseRequest(BaseModel):
+    """Requisição para gerar matéria jornalística a partir de uma ata."""
+
+    minute_id: Optional[str] = Field(default=None, description="UUID da sessão persistida")
+    minute: Optional[MinuteOutput] = Field(default=None, description="Objeto MinuteOutput direto")
+    tone: Literal["jornalistico", "executivo", "informal"] = Field(default="jornalistico")
+
+
+class NewsReleaseResponse(BaseModel):
+    """Release jornalístico gerado para publicação no portal da instituição."""
+
+    headline: str
+    subtitle: str
+    lead: str
+    body_paragraphs: List[str]
+    full_article_text: str
+    highlights: List[str]
+    suggested_tags: List[str]
+
+
+class CitizenSummaryRequest(BaseModel):
+    """Requisição para gerar resumo cidadão e versão para WhatsApp."""
+
+    minute_id: Optional[str] = Field(default=None, description="UUID da sessão persistida")
+    minute: Optional[MinuteOutput] = Field(default=None, description="Objeto MinuteOutput direto")
+
+
+class CitizenSummaryResponse(BaseModel):
+    """Resumo cidadão em linguagem simples para transparência pública."""
+
+    title: str
+    quick_take: str
+    approved_matters: List[str]
+    neighborhood_requests: List[str]
+    whatsapp_formatted: str
+
+
+class CouncilorDossierRequest(BaseModel):
+    """Requisição para extrair dossiê e recortes de atuação de um parlamentar."""
+
+    councilor_name: str = Field(..., description="Nome do vereador/parlamentar")
+    minute_id: Optional[str] = Field(default=None, description="UUID da sessão persistida")
+    minute: Optional[MinuteOutput] = Field(default=None, description="Objeto MinuteOutput direto")
+
+
+class CouncilorDossierResponse(BaseModel):
+    """Dossiê individualizado de prestação de contas do vereador."""
+
+    councilor_name: str
+    speaking_time: str
+    timeline_entries: List[str]
+    authored_matters: List[str]
+    social_media_caption: str

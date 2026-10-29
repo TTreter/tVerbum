@@ -306,6 +306,18 @@
           <button type="button" onclick="exportEditedFile('txt')" id="btn_txt" disabled class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition">
             TXT
           </button>
+
+          <button type="button" onclick="exportEditedFile('lexml')" id="btn_lexml" disabled class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition" title="Exportar metadados em padrão nacional LexML Brasil (XML)">
+            LexML (.xml)
+          </button>
+
+          <button type="button" onclick="exportEditedFile('gazette')" id="btn_gazette" disabled class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition" title="Formato padronizado para publicação em Diário Oficial dos Municípios">
+            Diário Oficial
+          </button>
+
+          <button type="button" onclick="openPressHubModal()" id="btn_press_hub" disabled class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-purple-600/30 to-pink-600/30 hover:from-purple-600/40 hover:to-pink-600/40 text-purple-300 border border-purple-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition" title="Gera release de imprensa, resumo para WhatsApp e dossiê por vereador">
+            📢 Hub de Imprensa
+          </button>
         </div>
       </div>
 
@@ -460,6 +472,86 @@ const ata = await res.json();
         </div>
         <div id="names_list_container" class="divide-y divide-slate-800 border border-slate-800 rounded-xl bg-slate-900/40 max-h-64 overflow-y-auto">
           <div class="p-4 text-xs text-slate-500 text-center">Carregando biblioteca...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Hub de Imprensa, Comunicação e Multi-Publicação (Sinergia tNuntia) -->
+  <div id="press_hub_modal" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-950 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 space-y-4 max-h-[88vh] overflow-y-auto">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div>
+          <h3 class="text-base font-bold text-white flex items-center gap-2">📢 Hub de Imprensa & Comunicação (tNuntia)</h3>
+          <p class="text-xs text-slate-400 mt-0.5">Multiplique o valor da ata gerando releases jornalísticos, resumos para WhatsApp e dossiês de vereadores.</p>
+        </div>
+        <button type="button" onclick="togglePressHubModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+      </div>
+
+      <!-- Tabs Navigation -->
+      <div class="flex border-b border-slate-800 gap-2">
+        <button type="button" id="tab_btn_release" onclick="switchPressTab('release')" class="px-4 py-2 text-xs font-semibold border-b-2 border-purple-500 text-purple-300">
+          📰 Release Jornalístico
+        </button>
+        <button type="button" id="tab_btn_citizen" onclick="switchPressTab('citizen')" class="px-4 py-2 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+          📲 Resumo Cidadão & WhatsApp
+        </button>
+        <button type="button" id="tab_btn_councilor" onclick="switchPressTab('councilor')" class="px-4 py-2 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+          👤 Dossiê do Parlamentar
+        </button>
+      </div>
+
+      <!-- Tab 1: News Release -->
+      <div id="tab_pane_release" class="space-y-3">
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Manchete Sugerida</label>
+          <input type="text" id="release_headline" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-semibold">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Subtítulo / Linha Fina</label>
+          <input type="text" id="release_subtitle" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-300">
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Matéria Completa (Lide + Desenvolvimento + Pronunciamentos)</label>
+          <textarea id="release_body" rows="8" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-xs text-slate-200 font-sans"></textarea>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button type="button" onclick="copyReleaseText()" id="btn_copy_release" class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold">
+            Copiar Matéria Completa
+          </button>
+        </div>
+      </div>
+
+      <!-- Tab 2: Citizen Summary & WhatsApp -->
+      <div id="tab_pane_citizen" class="hidden space-y-3">
+        <p class="text-xs text-slate-300">Mensagem pré-formatada com destaques e emojis, pronta para envio em listas de transmissão e grupos da comunidade:</p>
+        <textarea id="citizen_whatsapp_text" rows="10" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-xs text-emerald-300 font-mono"></textarea>
+        <div class="flex justify-end gap-2">
+          <button type="button" onclick="copyWhatsAppText()" id="btn_copy_whatsapp" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5">
+            📲 Copiar Mensagem para WhatsApp
+          </button>
+        </div>
+      </div>
+
+      <!-- Tab 3: Councilor Dossier -->
+      <div id="tab_pane_councilor" class="hidden space-y-3">
+        <div class="flex items-center gap-3">
+          <div class="flex-1">
+            <label class="block text-xs text-slate-400 mb-1">Selecione o Parlamentar</label>
+            <select id="councilor_select" onchange="loadCouncilorDossier()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white"></select>
+          </div>
+          <div id="councilor_time_badge" class="mt-4 px-3 py-1.5 rounded-lg bg-sky-500/20 text-sky-300 text-xs font-mono border border-sky-500/30">
+            Tempo: --
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Post Sugerido para Redes Sociais (Instagram / Facebook)</label>
+          <textarea id="councilor_social_caption" rows="7" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-xs text-slate-200"></textarea>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button type="button" onclick="copyCouncilorPost()" id="btn_copy_councilor" class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold">
+            📸 Copiar Post de Redes Sociais
+          </button>
         </div>
       </div>
     </div>
@@ -945,6 +1037,9 @@ const ata = await res.json();
         document.getElementById('btn_pdf').disabled = false;
         document.getElementById('btn_docx').disabled = false;
         document.getElementById('btn_txt').disabled = false;
+        document.getElementById('btn_lexml').disabled = false;
+        document.getElementById('btn_gazette').disabled = false;
+        document.getElementById('btn_press_hub').disabled = false;
 
       } catch (err) {
         alert('Ocorreu um erro: ' + err.message);
@@ -991,6 +1086,139 @@ const ata = await res.json();
       } catch (e) {
         alert('Erro na exportação: ' + e.message);
       }
+    }
+
+    function togglePressHubModal() {
+      const el = document.getElementById('press_hub_modal');
+      el.classList.toggle('hidden');
+    }
+
+    async function openPressHubModal() {
+      togglePressHubModal();
+      await loadPressHubData();
+    }
+
+    function switchPressTab(tab) {
+      const tabs = ['release', 'citizen', 'councilor'];
+      tabs.forEach(t => {
+        const btn = document.getElementById(`tab_btn_${t}`);
+        const pane = document.getElementById(`tab_pane_${t}`);
+        if (t === tab) {
+          btn.className = 'px-4 py-2 text-xs font-semibold border-b-2 border-purple-500 text-purple-300';
+          pane.classList.remove('hidden');
+        } else {
+          btn.className = 'px-4 py-2 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200';
+          pane.classList.add('hidden');
+        }
+      });
+    }
+
+    async function loadPressHubData() {
+      const minute = editorEl.getMinute();
+      if (!minute) return;
+
+      try {
+        // 1. Release de Notícias
+        const resRelease = await fetch('/api/generate-news-release', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ minute: minute })
+        });
+        if (resRelease.ok) {
+          const data = await resRelease.json();
+          document.getElementById('release_headline').value = data.headline;
+          document.getElementById('release_subtitle').value = data.subtitle;
+          document.getElementById('release_body').value = data.full_article_text;
+        }
+
+        // 2. Resumo Cidadão & WhatsApp
+        const resCitizen = await fetch('/api/generate-citizen-summary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ minute: minute })
+        });
+        if (resCitizen.ok) {
+          const data = await resCitizen.json();
+          document.getElementById('citizen_whatsapp_text').value = data.whatsapp_formatted;
+        }
+
+        // 3. Popula lista de vereadores
+        const councilorSelect = document.getElementById('councilor_select');
+        councilorSelect.innerHTML = '';
+        const ext = minute.extracted_data || {};
+        const members = (ext.present_members && ext.present_members.length > 0)
+          ? ext.present_members
+          : Object.keys(ext.speaker_time_summary || {});
+
+        if (members.length === 0) {
+          members.push('Vereador Presente');
+        }
+
+        members.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          opt.innerText = m;
+          councilorSelect.appendChild(opt);
+        });
+
+        await loadCouncilorDossier();
+      } catch (err) {
+        console.error('Erro ao carregar dados do Press Hub:', err);
+      }
+    }
+
+    async function loadCouncilorDossier() {
+      const minute = editorEl.getMinute();
+      const councilor = document.getElementById('councilor_select').value;
+      if (!minute || !councilor) return;
+
+      try {
+        const res = await fetch('/api/generate-councilor-dossier', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ minute: minute, councilor_name: councilor })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('councilor_time_badge').innerText = `Tempo: ${data.speaking_time}`;
+          document.getElementById('councilor_social_caption').value = data.social_media_caption;
+        }
+      } catch (err) {
+        console.error('Erro ao gerar dossiê do vereador:', err);
+      }
+    }
+
+    function copyReleaseText() {
+      const h = document.getElementById('release_headline').value;
+      const s = document.getElementById('release_subtitle').value;
+      const b = document.getElementById('release_body').value;
+      const full = `${h}\n${s}\n\n${b}`;
+      navigator.clipboard.writeText(full).then(() => {
+        const btn = document.getElementById('btn_copy_release');
+        const orig = btn.innerText;
+        btn.innerText = 'Copiado com Sucesso!';
+        setTimeout(() => { btn.innerText = orig; }, 2000);
+      });
+    }
+
+    function copyWhatsAppText() {
+      const txt = document.getElementById('citizen_whatsapp_text').value;
+      navigator.clipboard.writeText(txt).then(() => {
+        const btn = document.getElementById('btn_copy_whatsapp');
+        const orig = btn.innerText;
+        btn.innerText = 'Copiado para o WhatsApp!';
+        setTimeout(() => { btn.innerText = orig; }, 2000);
+      });
+    }
+
+    function copyCouncilorPost() {
+      const txt = document.getElementById('councilor_social_caption').value;
+      navigator.clipboard.writeText(txt).then(() => {
+        const btn = document.getElementById('btn_copy_councilor');
+        const orig = btn.innerText;
+        btn.innerText = 'Post Copiado!';
+        setTimeout(() => { btn.innerText = orig; }, 2000);
+      });
     }
   </script>
 </body>

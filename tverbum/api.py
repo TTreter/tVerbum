@@ -35,6 +35,12 @@ from .models import (
     AgendaExtractResponse,
     DetectSpeakersRequest,
     DetectSpeakersResponse,
+    NewsReleaseRequest,
+    NewsReleaseResponse,
+    CitizenSummaryRequest,
+    CitizenSummaryResponse,
+    CouncilorDossierRequest,
+    CouncilorDossierResponse,
     VotedMatter,
 )
 from .ai_engine import MinuteGenerator
@@ -47,6 +53,7 @@ from .limiter import RateLimiter
 from .sapl_client import SaplClient
 from .agenda_parser import AgendaParser
 from .speaker_mapper import SpeakerMapper
+from .press_hub import PressHub
 
 app = FastAPI(
     title="tVerbum API",
@@ -109,8 +116,27 @@ def _export_minute_to_response(minute: MinuteOutput, fmt: str) -> FileResponse:
             filename=f"{safe_title}.md",
             media_type="text/markdown; charset=utf-8",
         )
+    elif fmt in ("lexml", "xml"):
+        file_path = _TEMP_DIR / f"{safe_title}_{unique_suffix}_lexml.xml"
+        file_path.write_text(PressHub.export_lexml(minute), encoding="utf-8")
+        return FileResponse(
+            path=str(file_path),
+            filename=f"{safe_title}_lexml.xml",
+            media_type="application/xml; charset=utf-8",
+        )
+    elif fmt in ("gazette", "diario"):
+        file_path = _TEMP_DIR / f"{safe_title}_{unique_suffix}_gazette.txt"
+        file_path.write_text(PressHub.export_official_gazette(minute), encoding="utf-8")
+        return FileResponse(
+            path=str(file_path),
+            filename=f"{safe_title}_diario_oficial.txt",
+            media_type="text/plain; charset=utf-8",
+        )
     else:
-        raise HTTPException(status_code=400, detail="Formato não suportado. Use 'pdf', 'docx', 'txt' ou 'md'.")
+        raise HTTPException(
+            status_code=400,
+            detail="Formato não suportado. Use 'pdf', 'docx', 'txt', 'md', 'lexml' ou 'gazette'.",
+        )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -775,3 +801,54 @@ async def detect_speakers_endpoint(payload: DetectSpeakersRequest):
         detected_cues=cues,
         speaker_time_summary=time_summary,
     )
+
+
+def _resolve_minute_from_request(minute_id: Optional[str], minute_obj: Optional[MinuteOutput]) -> MinuteOutput:
+    if minute_obj:
+        return minute_obj
+    target_id = _LATEST_MINUTE_ID if minute_id in ("latest", None) else minute_id
+    if target_id:
+        cached = VideoCache.get_session(target_id)
+        if cached:
+            return MinuteOutput(**cached)
+        if target_id in _MINUTES_STORE:
+            return _MINUTES_STORE[target_id]
+    raise HTTPException(status_code=404, detail="Ata não encontrada para gerar o produto de imprensa.")
+
+
+@app.post("/api/generate-news-release", response_model=NewsReleaseResponse)
+async def generate_news_release_endpoint(payload: NewsReleaseRequest):
+    """Gera release jornalístico oficial para publicação no portal da Câmara."""
+    minute = _resolve_minute_from_request(payload.minute_id, payload.minute)
+    data = PressHub.generate_news_release(minute, tone=payload.tone)
+    return NewsReleaseResponse(**data)
+
+
+@app.post("/api/generate-citizen-summary", response_model=CitizenSummaryResponse)
+async def generate_citizen_summary_endpoint(payload: CitizenSummaryRequest):
+    """Gera resumo executivo simples para o cidadão e versão para transmissão no WhatsApp."""
+    minute = _resolve_minute_from_request(payload.minute_id, payload.minute)
+    data = PressHub.generate_citizen_summary(minute)
+    return CitizenSummaryResponse(**data)
+
+
+@app.post("/api/generate-councilor-dossier", response_model=CouncilorDossierResponse)
+async def generate_councilor_dossier_endpoint(payload: CouncilorDossierRequest):
+    """Gera dossiê com os pronunciamentos, matérias e post de rede social de um vereador."""
+    minute = _resolve_minute_from_request(payload.minute_id, payload.minute)
+    data = PressHub.generate_councilor_dossier(minute, payload.councilor_name)
+    return CouncilorDossierResponse(**data)
+
+
+@app.post("/api/export/lexml")
+async def export_lexml_endpoint(payload: ExportRequest):
+    """Exporta a ata no padrão nacional LexML Brasil (XML)."""
+    xml_str = PressHub.export_lexml(payload.minute)
+    return Response(content=xml_str, media_type="application/xml")
+
+
+@app.post("/api/export/official-gazette")
+async def export_official_gazette_endpoint(payload: ExportRequest):
+    """Exporta a ata diagramada para publicação no Diário Oficial dos Municípios."""
+    gazette_text = PressHub.export_official_gazette(payload.minute)
+    return Response(content=gazette_text, media_type="text/plain; charset=utf-8")
