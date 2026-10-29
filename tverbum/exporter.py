@@ -7,6 +7,7 @@ import os
 import io
 import base64
 import urllib.request
+import hashlib
 from typing import Optional
 from docx import Document
 from docx.shared import Pt, Inches
@@ -203,6 +204,21 @@ class MinuteExporter:
                             run.font.name = "Arial"
                             run.font.size = Pt(10)
 
+        # Carimbo Cartorial de Autenticidade e Integridade (SHA-256)
+        doc_hash = getattr(output, "integrity_hash", None) or hashlib.sha256(output.full_text.encode("utf-8")).hexdigest()
+        status_label = getattr(output, "document_status", "rascunho_ia").replace("_", " ").upper()
+
+        doc.add_paragraph()
+        p_auth = doc.add_paragraph()
+        p_auth.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r_auth1 = p_auth.add_run("VALIDAÇÃO E INTEGRIDADE CARTORIAL (LEI Nº 14.063/2020)\n")
+        r_auth1.font.name = "Arial"
+        r_auth1.font.size = Pt(7.5)
+        r_auth1.font.bold = True
+        r_auth2 = p_auth.add_run(f"Status Documental: {status_label} | Chave SHA-256:\n{doc_hash}")
+        r_auth2.font.name = "Courier New"
+        r_auth2.font.size = Pt(7)
+
         doc.save(file_path)
         return file_path
 
@@ -223,6 +239,9 @@ class MinuteExporter:
             topMargin=2.0 * cm,
             bottomMargin=2.0 * cm,
             title=output.title,
+            author=output.organization_name or "Câmara Municipal",
+            subject=f"Ata {output.title}",
+            creator="tVerbum Cartorial Engine",
         )
 
         styles = getSampleStyleSheet()
@@ -379,6 +398,39 @@ class MinuteExporter:
                 )
             )
             story.append(sig_table)
+
+        # Rodapé de Integridade e Validação Cartorial
+        doc_hash = getattr(output, "integrity_hash", None) or hashlib.sha256(output.full_text.encode("utf-8")).hexdigest()
+        status_label = getattr(output, "document_status", "rascunho_ia").replace("_", " ").upper()
+
+        style_auth_title = ParagraphStyle(
+            "MinuteAuthTitle",
+            parent=styles["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=7,
+            leading=9,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#475569"),
+            spaceBefore=14,
+        )
+        style_auth_body = ParagraphStyle(
+            "MinuteAuthBody",
+            parent=styles["Normal"],
+            fontName="Courier",
+            fontSize=6.5,
+            leading=8.5,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor("#64748b"),
+        )
+
+        story.append(Spacer(1, 0.6 * cm))
+        story.append(Paragraph("VALIDAÇÃO E INTEGRIDADE CARTORIAL (LEI Nº 14.063/2020)", style_auth_title))
+        story.append(
+            Paragraph(
+                f"Status: {status_label} &nbsp;|&nbsp; Chave SHA-256: {doc_hash}",
+                style_auth_body,
+            )
+        )
 
         doc.build(story)
         return file_path

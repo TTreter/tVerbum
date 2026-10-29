@@ -5,6 +5,7 @@ Inclui endpoints de validação pós-edição, reescrita de trecho com IA e entr
 
 import uuid
 import json
+import hashlib
 import asyncio
 import tempfile
 import logging
@@ -17,6 +18,7 @@ from fastapi.responses import HTMLResponse, FileResponse, Response, StreamingRes
 from .models import (
     MinuteConfig,
     MinuteOutput,
+    UpdateMinuteRequest,
     ExportRequest,
     OrganizationPreset,
     NameEntry,
@@ -410,6 +412,52 @@ async def get_session_by_id(minute_id: str):
     if not minute:
         raise HTTPException(status_code=404, detail="Sessão/Ata não encontrada para o minute_id informado.")
     return minute
+
+
+@app.put("/api/session/{minute_id}", response_model=MinuteOutput)
+async def update_session_by_id(minute_id: str, payload: UpdateMinuteRequest):
+    """
+    Atualiza o título, o corpo da ata e/ou o status no ciclo de vida notarial.
+    Recalcula o hash SHA-256 de integridade e persiste as alterações no banco SQLite.
+    """
+    data = VideoCache.get_session(minute_id)
+    if not data:
+        cached = _MINUTES_STORE.get(minute_id)
+        if cached:
+            data = cached.model_dump()
+        else:
+            raise HTTPException(status_code=404, detail="Sessão não encontrada para atualização.")
+
+    if payload.title is not None:
+        data["title"] = payload.title.strip()
+    if payload.body is not None:
+        data["body"] = payload.body.strip()
+    if payload.document_status is not None:
+        data["document_status"] = payload.document_status
+
+    doc_parts = []
+    if data.get("header"):
+        doc_parts.append(data["header"])
+    elif data.get("title"):
+        doc_parts.append(data["title"])
+    if data.get("body"):
+        doc_parts.append(data["body"])
+    if data.get("signatures"):
+        doc_parts.append(data["signatures"])
+
+    full_text = "\n\n".join(doc_parts)
+    data["full_text"] = full_text
+    data["integrity_hash"] = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
+
+    meta = data.get("metadata") or {}
+    meta["word_count"] = len(data["body"].split()) if data.get("body") else 0
+    meta["character_count"] = len(data["body"]) if data.get("body") else 0
+    data["metadata"] = meta
+
+    VideoCache.save_session(minute_id, data)
+    output_obj = MinuteOutput(**data)
+    _MINUTES_STORE[minute_id] = output_obj
+    return output_obj
 
 
 @app.get("/api/providers")

@@ -24,6 +24,8 @@ class TVerbumEditor extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._minute = null;
     this._highlightsActive = false;
+    this._diffActive = false;
+    this._autosaveTimer = null;
   }
 
   static get observedAttributes() {
@@ -40,8 +42,16 @@ class TVerbumEditor extends HTMLElement {
 
   setMinute(minuteData) {
     this._minute = JSON.parse(JSON.stringify(minuteData));
+    if (!this._minute.original_body && this._minute.body) {
+      this._minute.original_body = this._minute.body;
+    }
+    if (!this._minute.document_status) {
+      this._minute.document_status = 'rascunho_ia';
+    }
     this._highlightsActive = false;
+    this._diffActive = false;
     this._updateView();
+    this._checkLocalDraft();
   }
 
   getMinute() {
@@ -57,7 +67,7 @@ class TVerbumEditor extends HTMLElement {
 
   setBodyText(text) {
     if (!this._minute) {
-      this._minute = { title: 'ATA DE SESSÃO', body: text, metadata: {} };
+      this._minute = { title: 'ATA DE SESSÃO', body: text, original_body: text, document_status: 'rascunho_ia', metadata: {} };
     } else {
       this._minute.body = text;
     }
@@ -65,7 +75,7 @@ class TVerbumEditor extends HTMLElement {
   }
 
   _syncFromDOM() {
-    if (!this._minute) return;
+    if (!this._minute || this._diffActive) return;
     const titleEl = this.shadowRoot.getElementById('tv-title');
     const bodyEl = this.shadowRoot.getElementById('tv-body');
     if (titleEl) this._minute.title = titleEl.innerText.trim();
@@ -75,6 +85,223 @@ class TVerbumEditor extends HTMLElement {
       this._minute.body,
       this._minute.signatures || ''
     ].filter(Boolean).join('\n\n');
+  }
+
+  _showToast(msg, duration = 4000) {
+    const msgBox = this.shadowRoot.getElementById('tv-toast');
+    if (msgBox) {
+      msgBox.innerText = msg;
+      msgBox.style.display = 'block';
+      clearTimeout(this._toastTimer);
+      this._toastTimer = setTimeout(() => { msgBox.style.display = 'none'; }, duration);
+    }
+  }
+
+  _checkLocalDraft() {
+    if (!this._minute || !this._minute.id) return;
+    const banner = this.shadowRoot.getElementById('tv-draft-banner');
+    if (!banner) return;
+
+    try {
+      const raw = localStorage.getItem('tverbum_draft_' + this._minute.id);
+      if (!raw) {
+        banner.style.display = 'none';
+        return;
+      }
+      const draft = JSON.parse(raw);
+      if (draft && draft.body && draft.body.trim() !== (this._minute.body || '').trim()) {
+        const timeStr = draft.saved_at ? new Date(draft.saved_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        const infoSpan = this.shadowRoot.getElementById('tv-draft-info');
+        if (infoSpan) {
+          infoSpan.innerText = `⚠️ Encontrado rascunho salvo localmente neste navegador (${timeStr}). Deseja restaurar as edições?`;
+        }
+        banner.style.display = 'flex';
+      } else {
+        banner.style.display = 'none';
+      }
+    } catch (e) {
+      banner.style.display = 'none';
+    }
+  }
+
+  _restoreLocalDraft() {
+    if (!this._minute || !this._minute.id) return;
+    try {
+      const raw = localStorage.getItem('tverbum_draft_' + this._minute.id);
+      if (!raw) return;
+      const draft = JSON.parse(raw);
+      if (draft.body) this._minute.body = draft.body;
+      if (draft.title) this._minute.title = draft.title;
+      if (draft.document_status) this._minute.document_status = draft.document_status;
+      this._updateView();
+      const banner = this.shadowRoot.getElementById('tv-draft-banner');
+      if (banner) banner.style.display = 'none';
+      this._showToast('💾 Rascunho local restaurado com sucesso!');
+    } catch (e) {}
+  }
+
+  _discardLocalDraft() {
+    if (!this._minute || !this._minute.id) return;
+    try {
+      localStorage.removeItem('tverbum_draft_' + this._minute.id);
+      const banner = this.shadowRoot.getElementById('tv-draft-banner');
+      if (banner) banner.style.display = 'none';
+      this._showToast('Rascunho local descartado.');
+    } catch (e) {}
+  }
+
+  _scheduleAutosave() {
+    clearTimeout(this._autosaveTimer);
+    this._autosaveTimer = setTimeout(() => {
+      this._performAutosave();
+    }, 700);
+  }
+
+  _performAutosave() {
+    if (!this._minute || !this._minute.id || this._diffActive) return;
+    this._syncFromDOM();
+    const draft = {
+      body: this._minute.body,
+      title: this._minute.title,
+      document_status: this._minute.document_status || 'rascunho_ia',
+      saved_at: Date.now(),
+    };
+    try {
+      localStorage.setItem('tverbum_draft_' + this._minute.id, JSON.stringify(draft));
+      const badge = this.shadowRoot.getElementById('tv-autosave-badge');
+      if (badge) {
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        badge.innerText = `💾 Salvo (${timeStr})`;
+      }
+    } catch (e) {}
+  }
+
+  async setDocumentStatus(status) {
+    if (!this._minute) return;
+    this._minute.document_status = status;
+    this._updateStatusBadge();
+    this.dispatchEvent(new CustomEvent('tverbum-status-change', {
+      detail: { status, minute_id: this._minute.id },
+      bubbles: true,
+      composed: true,
+    }));
+
+    if (this.apiBase && this._minute.id && this._minute.id.length > 5) {
+      try {
+        await fetch(`${this.apiBase}/api/session/${this._minute.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ document_status: status }),
+        });
+      } catch (e) {}
+    }
+    this._performAutosave();
+  }
+
+  _updateStatusBadge() {
+    const sel = this.shadowRoot.getElementById('tv-status-select');
+    const badge = this.shadowRoot.getElementById('tv-status-badge');
+    const status = (this._minute && this._minute.document_status) || 'rascunho_ia';
+    if (sel) sel.value = status;
+    if (badge) {
+      badge.className = `tv-status-badge status-${status}`;
+    }
+  }
+
+  _toggleDiff() {
+    if (!this._minute) return;
+    this._syncFromDOM();
+    const bodyEl = this.shadowRoot.getElementById('tv-body');
+    const diffBtn = this.shadowRoot.getElementById('btn-diff');
+    if (!bodyEl || !diffBtn) return;
+
+    this._diffActive = !this._diffActive;
+    if (!this._diffActive) {
+      bodyEl.innerText = this._minute.body;
+      bodyEl.contentEditable = "true";
+      diffBtn.classList.remove('tv-btn-active');
+      diffBtn.innerText = '🔍 Ver Alterações (Diff)';
+      return;
+    }
+
+    const original = (this._minute.original_body || '').trim();
+    const current = (this._minute.body || '').trim();
+
+    if (!original) {
+      this._showToast('Texto original da IA não disponível para comparação.');
+      this._diffActive = false;
+      return;
+    }
+
+    if (original === current) {
+      this._showToast('ℹ️ O texto atual é idêntico à minuta original gerada pela IA.');
+      this._diffActive = false;
+      return;
+    }
+
+    const diff = this._computeWordDiff(original, current);
+    bodyEl.innerHTML = diff.html;
+    bodyEl.contentEditable = "false";
+    diffBtn.classList.add('tv-btn-active');
+    diffBtn.innerText = `✕ Fechar Diff (+${diff.insCount} / -${diff.delCount})`;
+  }
+
+  _computeWordDiff(textA, textB) {
+    const wordsA = textA.split(/\s+/).filter(Boolean);
+    const wordsB = textB.split(/\s+/).filter(Boolean);
+    const m = wordsA.length;
+    const n = wordsB.length;
+
+    // Se um dos textos for excessivamente grande (> 3000 palavras), faz fallback rápido
+    if (m * n > 4000000) {
+      return { html: this._escapeHtml(textB), insCount: 0, delCount: 0 };
+    }
+
+    const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+    for (let i = 0; i < m; i++) {
+      for (let j = 0; j < n; j++) {
+        if (wordsA[i] === wordsB[j]) {
+          dp[i + 1][j + 1] = dp[i][j] + 1;
+        } else {
+          dp[i + 1][j + 1] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+      }
+    }
+
+    let i = m;
+    let j = n;
+    const chunks = [];
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && wordsA[i - 1] === wordsB[j - 1]) {
+        chunks.push({ type: 'same', word: wordsA[i - 1] });
+        i--;
+        j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        chunks.push({ type: 'ins', word: wordsB[j - 1] });
+        j--;
+      } else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
+        chunks.push({ type: 'del', word: wordsA[i - 1] });
+        i--;
+      }
+    }
+    chunks.reverse();
+
+    let html = '';
+    let insCount = 0;
+    let delCount = 0;
+    for (const c of chunks) {
+      const esc = this._escapeHtml(c.word);
+      if (c.type === 'same') {
+        html += esc + ' ';
+      } else if (c.type === 'ins') {
+        html += `<ins class="tv-diff-ins">${esc}</ins> `;
+        insCount++;
+      } else if (c.type === 'del') {
+        html += `<del class="tv-diff-del">${esc}</del> `;
+        delCount++;
+      }
+    }
+    return { html: html.trim(), insCount, delCount };
   }
 
   async validateAndNormalize(options = {}) {
@@ -401,6 +628,18 @@ class TVerbumEditor extends HTMLElement {
     }
 
     this._updateStats();
+    this._updateStatusBadge();
+
+    const stampEl = this.shadowRoot.getElementById('tv-integrity-stamp');
+    const hashEl = this.shadowRoot.getElementById('tv-stamp-hash');
+    if (stampEl && hashEl) {
+      if (this._minute.integrity_hash) {
+        stampEl.style.display = 'block';
+        hashEl.innerText = `Chave SHA-256: ${this._minute.integrity_hash}`;
+      } else {
+        stampEl.style.display = 'none';
+      }
+    }
   }
 
   _renderShell() {
@@ -452,6 +691,105 @@ class TVerbumEditor extends HTMLElement {
           background: #059669;
           color: #ffffff;
           border-color: #10b981;
+        }
+        .tv-btn-active {
+          background: #2563eb !important;
+          color: #ffffff !important;
+          border-color: #3b82f6 !important;
+        }
+        .tv-status-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 3px 8px;
+          border-radius: 8px;
+          font-size: 11px;
+          font-weight: 600;
+          border: 1px solid #334155;
+          background: #0f172a;
+        }
+        .tv-status-select {
+          background: transparent;
+          color: #e2e8f0;
+          border: none;
+          font-size: 11px;
+          font-weight: 600;
+          outline: none;
+          cursor: pointer;
+        }
+        .tv-status-select option {
+          background: #0f172a;
+          color: #e2e8f0;
+        }
+        .tv-status-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          display: inline-block;
+          background: #94a3b8;
+        }
+        .status-rascunho_ia .tv-status-dot { background: #94a3b8; }
+        .status-em_revisao .tv-status-dot { background: #fbbf24; }
+        .status-pronta_para_leitura .tv-status-dot { background: #a855f7; }
+        .status-aprovada_com_ressalvas .tv-status-dot { background: #f97316; }
+        .status-aprovada_definitiva .tv-status-dot { background: #10b981; }
+
+        .tv-diff-del {
+          background-color: #fee2e2;
+          color: #991b1b;
+          text-decoration: line-through;
+          padding: 1px 3px;
+          border-radius: 3px;
+          margin: 0 1px;
+        }
+        .tv-diff-ins {
+          background-color: #dcfce7;
+          color: #166534;
+          text-decoration: none;
+          font-weight: 600;
+          border-bottom: 2px solid #22c55e;
+          padding: 1px 3px;
+          border-radius: 3px;
+          margin: 0 1px;
+        }
+        .tv-draft-banner {
+          display: none;
+          background: #1e1b4b;
+          color: #c7d2fe;
+          border: 1px solid #4338ca;
+          border-radius: 8px;
+          padding: 8px 14px;
+          font-size: 12px;
+          margin-bottom: 10px;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+        }
+        .tv-draft-btn-group {
+          display: flex;
+          gap: 6px;
+        }
+        .tv-draft-btn {
+          background: #4f46e5;
+          color: #ffffff;
+          border: none;
+          border-radius: 6px;
+          padding: 4px 10px;
+          font-size: 11px;
+          font-weight: 500;
+          cursor: pointer;
+        }
+        .tv-draft-btn:hover { background: #4338ca; }
+        .tv-draft-btn-cancel {
+          background: #312e81;
+          color: #e0e7ff;
+        }
+        .tv-draft-btn-cancel:hover { background: #1e1b4b; }
+        .tv-autosave-badge {
+          font-size: 11px;
+          color: #64748b;
+          margin-right: 4px;
+          white-space: nowrap;
         }
         .tv-toast {
           display: none;
@@ -546,6 +884,25 @@ class TVerbumEditor extends HTMLElement {
           font-weight: 600;
           color: #334155;
         }
+        .tv-integrity-stamp {
+          margin-top: 36px;
+          padding-top: 14px;
+          border-top: 1px dashed #cbd5e1;
+          text-align: center;
+          font-family: monospace;
+        }
+        .tv-stamp-title {
+          font-size: 9px;
+          font-weight: 700;
+          color: #64748b;
+          letter-spacing: 0.05em;
+          margin-bottom: 2px;
+        }
+        .tv-stamp-hash {
+          font-size: 8.5px;
+          color: #94a3b8;
+          word-break: break-all;
+        }
         .tv-panels {
           display: none;
           grid-template-columns: 1fr 1fr;
@@ -597,6 +954,9 @@ class TVerbumEditor extends HTMLElement {
           <button type="button" class="tv-btn" id="btn-validate" title="Converte números/horários para extenso, expande abreviações e garante parágrafo único">
             ✓ Normalizar Padrão Cartorial
           </button>
+          <button type="button" class="tv-btn" id="btn-diff" title="Compara visualmente as edições feitas com a minuta original gerada pela IA">
+            🔍 Ver Alterações (Diff)
+          </button>
           <button type="button" class="tv-btn tv-btn-amber" id="btn-refine" title="Selecione uma frase no texto e clique para reescrever com IA">
             ✨ Reescrever Seleção com IA
           </button>
@@ -608,8 +968,28 @@ class TVerbumEditor extends HTMLElement {
           </button>
         </div>
         <div class="tv-btn-group">
-          <span id="tv-stats" style="font-size:11px;color:#94a3b8;margin-right:6px;">0 palavras</span>
+          <div class="tv-status-badge status-rascunho_ia" id="tv-status-badge" title="Ciclo de Vida Notarial da Ata">
+            <span class="tv-status-dot"></span>
+            <select id="tv-status-select" class="tv-status-select">
+              <option value="rascunho_ia">🤖 Rascunho IA</option>
+              <option value="em_revisao">📝 Em Revisão</option>
+              <option value="pronta_para_leitura">📜 Pronta p/ Leitura</option>
+              <option value="aprovada_com_ressalvas">⚠️ Aprovada c/ Ressalvas</option>
+              <option value="aprovada_definitiva">✅ Aprovada Definitiva</option>
+            </select>
+          </div>
+          <span id="tv-autosave-badge" class="tv-autosave-badge"></span>
+          <span id="tv-stats" style="font-size:11px;color:#94a3b8;margin-right:4px;">0 palavras</span>
           ${showSave ? '<button type="button" class="tv-btn tv-btn-emerald" id="btn-save-host">💾 Salvar Ata</button>' : ''}
+        </div>
+      </div>
+
+      <!-- Draft Recovery Banner -->
+      <div id="tv-draft-banner" class="tv-draft-banner">
+        <span id="tv-draft-info">⚠️ Há edições anteriores salvas localmente neste navegador. Deseja restaurá-las?</span>
+        <div class="tv-draft-btn-group">
+          <button type="button" class="tv-draft-btn" id="btn-draft-restore">Restaurar Rascunho</button>
+          <button type="button" class="tv-draft-btn tv-draft-btn-cancel" id="btn-draft-discard">Descartar</button>
         </div>
       </div>
 
@@ -635,6 +1015,11 @@ class TVerbumEditor extends HTMLElement {
             <div><div class="tv-sig-line">Secretário</div></div>
             <div><div class="tv-sig-line">Presidente</div></div>
           </div>
+
+          <div id="tv-integrity-stamp" class="tv-integrity-stamp" style="display:none;">
+            <div class="tv-stamp-title">VALIDAÇÃO E INTEGRIDADE CARTORIAL (LEI Nº 14.063/2020)</div>
+            <div id="tv-stamp-hash" class="tv-stamp-hash"></div>
+          </div>
         </div>
       </div>
 
@@ -651,9 +1036,19 @@ class TVerbumEditor extends HTMLElement {
       </div>
     `;
 
-    this.shadowRoot.getElementById('tv-body').addEventListener('input', () => this._updateStats());
-    this.shadowRoot.getElementById('tv-title').addEventListener('input', () => this._updateStats());
+    this.shadowRoot.getElementById('tv-body').addEventListener('input', () => {
+      this._updateStats();
+      this._scheduleAutosave();
+    });
+    this.shadowRoot.getElementById('tv-title').addEventListener('input', () => {
+      this._updateStats();
+      this._scheduleAutosave();
+    });
     this.shadowRoot.getElementById('btn-validate').addEventListener('click', () => this.validateAndNormalize());
+    this.shadowRoot.getElementById('btn-diff').addEventListener('click', () => this._toggleDiff());
+    this.shadowRoot.getElementById('tv-status-select').addEventListener('change', (e) => this.setDocumentStatus(e.target.value));
+    this.shadowRoot.getElementById('btn-draft-restore').addEventListener('click', () => this._restoreLocalDraft());
+    this.shadowRoot.getElementById('btn-draft-discard').addEventListener('click', () => this._discardLocalDraft());
     this.shadowRoot.getElementById('btn-refine').addEventListener('click', () => {
       const instruction = prompt(
         'Como deseja reescrever o trecho selecionado?',

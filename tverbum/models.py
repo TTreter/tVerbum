@@ -278,6 +278,24 @@ class MinuteOutput(BaseModel):
         default=None,
         description="Transcrição completa e cronológica da sessão extraída do YouTube",
     )
+    original_body: Optional[str] = Field(
+        default=None,
+        description="Texto original bruto gerado pela IA antes de quaisquer alterações manuais humanas",
+    )
+    document_status: Literal[
+        "rascunho_ia",
+        "em_revisao",
+        "pronta_para_leitura",
+        "aprovada_com_ressalvas",
+        "aprovada_definitiva",
+    ] = Field(
+        default="rascunho_ia",
+        description="Status no ciclo de vida notarial/cartorial da ata",
+    )
+    integrity_hash: Optional[str] = Field(
+        default=None,
+        description="Hash criptográfico SHA-256 do full_text para verificação pública de integridade",
+    )
 
     # --- Dados Estruturados para Integração com Sistemas Externos ---
     extracted_data: ExtractedSessionData = Field(
@@ -303,6 +321,22 @@ class ExportRequest(BaseModel):
 
     format: Literal["docx", "pdf", "txt", "md"] = Field(default="docx")
     minute: MinuteOutput
+
+
+class UpdateMinuteRequest(BaseModel):
+    """Payload enviado para atualizar o conteúdo e status de uma ata persistida."""
+
+    title: Optional[str] = Field(default=None, description="Título formal atualizado da ata")
+    body: Optional[str] = Field(default=None, description="Texto revisado do corpo da ata")
+    document_status: Optional[
+        Literal[
+            "rascunho_ia",
+            "em_revisao",
+            "pronta_para_leitura",
+            "aprovada_com_ressalvas",
+            "aprovada_definitiva",
+        ]
+    ] = Field(default=None, description="Novo status no ciclo de vida notarial")
 
 
 class ValidateTextRequest(BaseModel):

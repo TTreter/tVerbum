@@ -9,6 +9,7 @@ import os
 import json
 import time
 import uuid
+import hashlib
 import logging
 from typing import Optional, List, Any, Tuple
 from dotenv import load_dotenv
@@ -473,6 +474,7 @@ DIRETRIZES FUNDAMENTAIS DE REDAÇÃO DO CAMPO 'body':
             doc_parts.append(signatures_text)
 
         full_text = "\n".join(doc_parts)
+        integrity_hash = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
 
         meta.pop("auxiliary_captions", None)
         meta["word_count"] = len(processed_body.split())
@@ -491,6 +493,9 @@ DIRETRIZES FUNDAMENTAIS DE REDAÇÃO DO CAMPO 'body':
             organization_details=config.organization_details,
             logo_url=config.logo_url,
             body=processed_body,
+            original_body=processed_body,
+            document_status="rascunho_ia",
+            integrity_hash=integrity_hash,
             signatures=signatures_text,
             full_text=full_text,
             raw_transcript=raw_transcript_text if config.include_raw_transcript else None,

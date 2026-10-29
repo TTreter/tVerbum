@@ -194,6 +194,17 @@ class VideoCache:
         try:
             now = time.time()
             with cls._get_conn() as conn:
+                existing = conn.execute(
+                    "SELECT created_at, config_json FROM session_store WHERE minute_id = ?",
+                    (minute_id,),
+                ).fetchone()
+                created_at = existing[0] if existing else now
+                saved_config = (
+                    json.dumps(config_data, ensure_ascii=False)
+                    if config_data is not None
+                    else (existing[1] if existing else None)
+                )
+
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO session_store (minute_id, created_at, output_json, config_json, updated_at)
@@ -201,9 +212,9 @@ class VideoCache:
                     """,
                     (
                         minute_id,
-                        now,
+                        created_at,
                         json.dumps(output_data, ensure_ascii=False),
-                        json.dumps(config_data, ensure_ascii=False) if config_data else None,
+                        saved_config,
                         now,
                     ),
                 )
