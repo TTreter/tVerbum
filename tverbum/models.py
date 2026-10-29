@@ -107,10 +107,14 @@ class MinuteConfig(BaseModel):
     Parâmetros de configuração enviados pelo usuário ou sistema externo para gerar uma ata.
     """
 
-    # --- Parâmetros Obrigatórios ---
-    video_url: str = Field(
-        ...,
-        description="URL do vídeo da sessão no YouTube (suporta links watch, youtu.be, live e embed)",
+    # --- Parâmetros Obrigatórios (Vídeo do YouTube ou Arquivo Local) ---
+    video_url: Optional[str] = Field(
+        default=None,
+        description="URL do vídeo da sessão no YouTube (suporta links watch, youtu.be, live e embed) ou caminho local",
+    )
+    media_file_path: Optional[str] = Field(
+        default=None,
+        description="Caminho de arquivo local de áudio ou vídeo previamente enviado via /api/upload-media",
     )
     session_number: str = Field(
         ...,
@@ -240,8 +244,13 @@ class MinuteConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def sync_paragraph_settings(self) -> "MinuteConfig":
-        """Mantém coerência entre a flag booleana `single_paragraph` e o inteiro `paragraph_count`."""
+    def sync_paragraph_and_media_settings(self) -> "MinuteConfig":
+        """Mantém coerência entre parâmetros de mídia e parágrafos."""
+        if not self.video_url and not self.media_file_path:
+            raise ValueError("É obrigatório informar ao menos 'video_url' ou 'media_file_path'.")
+        if not self.video_url and self.media_file_path:
+            self.video_url = self.media_file_path
+
         if not self.single_paragraph and self.paragraph_count == 1:
             self.paragraph_count = 5
         elif self.paragraph_count > 1:

@@ -7,7 +7,7 @@ import uuid
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, Response
 
@@ -118,6 +118,49 @@ async def serve_editor_component():
         content=js_path.read_text(encoding="utf-8"),
         media_type="application/javascript; charset=utf-8",
     )
+
+
+ALLOWED_MEDIA_EXTENSIONS = {
+    ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac",
+    ".mp4", ".mkv", ".webm", ".mov", ".avi"
+}
+
+
+@app.post("/api/upload-media")
+async def upload_media_file(file: UploadFile = File(...)):
+    """
+    Recebe um arquivo de áudio ou vídeo local (.mp3, .wav, .m4a, .mp4, etc.),
+    salva no servidor temporário e retorna o caminho absoluto para uso em MinuteConfig.
+    """
+    original_name = file.filename or "uploaded_media.mp3"
+    ext = Path(original_name).suffix.lower()
+    if ext not in ALLOWED_MEDIA_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Formato de arquivo '{ext}' não suportado. Use: {', '.join(sorted(ALLOWED_MEDIA_EXTENSIONS))}",
+        )
+
+    safe_name = "".join(c for c in Path(original_name).stem if c.isalnum() or c in ("-", "_")).strip() or "media"
+    unique_filename = f"{uuid.uuid4().hex[:8]}_{safe_name}{ext}"
+    dest_path = _TEMP_DIR / unique_filename
+
+    total_bytes = 0
+    with open(dest_path, "wb") as buffer:
+        while chunk := await file.read(1024 * 1024):  # blocos de 1MB
+            buffer.write(chunk)
+            total_bytes += len(chunk)
+
+    size_mb = round(total_bytes / (1024 * 1024), 2)
+    is_video = ext in {".mp4", ".mkv", ".webm", ".mov", ".avi"}
+
+    return {
+        "status": "ok",
+        "filename": original_name,
+        "file_path": str(dest_path),
+        "size_mb": size_mb,
+        "media_type": "video" if is_video else "audio",
+        "message": "Arquivo enviado com sucesso. Utilize este 'file_path' para gerar a ata.",
+    }
 
 
 @app.get("/api/presets", response_model=List[OrganizationPreset])

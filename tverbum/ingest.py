@@ -7,14 +7,17 @@ Inclui cache local SQLite para evitar reprocessamentos.
 
 import re
 import os
+import hashlib
 import tempfile
 import logging
+import subprocess
+from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 from youtube_transcript_api import YouTubeTranscriptApi
 import yt_dlp
 
 from .cache import VideoCache
-from .transcriber import GroqWhisperTranscriber
+from .transcriber import GroqWhisperTranscriber, get_ffmpeg_binary
 
 logger = logging.getLogger("tverbum.ingest")
 
@@ -24,8 +27,14 @@ class ContentIngestor:
 
     @staticmethod
     def extract_video_id(url: str) -> Optional[str]:
-        """Extrai o ID de 11 caracteres do vídeo a partir de múltiplos formatos de URL do YouTube."""
+        """Extrai o ID do vídeo a partir de URL do YouTube ou gera ID estável para arquivos locais."""
         url = url.strip()
+
+        # Verifica se é arquivo local existente
+        if os.path.exists(url):
+            hash_suffix = hashlib.md5(os.path.abspath(url).encode("utf-8")).hexdigest()[:8]
+            clean_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", Path(url).stem)[:15]
+            return f"loc_{clean_stem}_{hash_suffix}"
 
         patterns = [
             r"(?:v=|\/)([0-9A-Za-z_-]{11}).*",
@@ -43,13 +52,18 @@ class ContentIngestor:
         if re.match(r"^[0-9A-Za-z_-]{11}$", url):
             return url
 
+        if url.startswith("loc_"):
+            return url
+
         return None
 
     @classmethod
     def get_canonical_youtube_url(cls, url_or_id: str) -> str:
-        """Retorna a URL canônica do YouTube."""
+        """Retorna a URL canônica do YouTube ou mantém o caminho do arquivo local."""
+        if os.path.exists(url_or_id) or str(url_or_id).startswith("loc_"):
+            return str(url_or_id).strip()
         vid = cls.extract_video_id(url_or_id)
-        if vid:
+        if vid and not vid.startswith("loc_"):
             return f"https://www.youtube.com/watch?v={vid}"
         return url_or_id.strip()
 
@@ -176,6 +190,70 @@ class ContentIngestor:
         video_id = cls.extract_video_id(video_url)
         if not video_id:
             raise ValueError(f"Não foi possível identificar o ID do vídeo a partir da URL: {video_url}")
+
+        # Ingestão Direta de Arquivo Local (Áudio ou Vídeo)
+        if os.path.exists(video_url):
+            cached = None if bypass_cache else VideoCache.get(video_id)
+            if cached and cached.get("transcript"):
+                metadata = dict(cached.get("metadata", {}))
+                metadata["video_id"] = video_id
+                metadata["url"] = video_url
+                metadata["cache_hit"] = True
+                metadata["method"] = "local_media_cached"
+                return ("captions", cached["transcript"], metadata)
+
+            whisper = GroqWhisperTranscriber()
+            if not whisper.is_available():
+                raise RuntimeError(
+                    "O processamento de arquivos locais de áudio/vídeo requer a chave GROQ_API_KEY configurada para transcrição via Whisper."
+                )
+
+            ext = os.path.splitext(video_url)[1].lower()
+            is_video = ext in (".mp4", ".mkv", ".webm", ".mov", ".avi")
+            audio_target = video_url
+            temp_extracted = None
+
+            if is_video:
+                temp_extracted = os.path.join(tempfile.gettempdir(), f"extracted_{video_id}.m4a")
+                logger.info(f"Extraindo faixa de áudio de vídeo local para {temp_extracted}...")
+                ffmpeg_bin = get_ffmpeg_binary()
+                if not ffmpeg_bin:
+                    raise RuntimeError("FFmpeg não encontrado para extrair áudio de vídeo local.")
+                cmd = [
+                    ffmpeg_bin, "-y", "-i", video_url, "-vn",
+                    "-ac", "1", "-ar", "16000", "-c:a", "aac", "-b:a", "32k",
+                    temp_extracted
+                ]
+                proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if proc.returncode != 0 or not os.path.exists(temp_extracted):
+                    err_msg = proc.stderr.decode("utf-8", errors="ignore")
+                    raise RuntimeError(f"Falha ao extrair áudio do vídeo local: {err_msg}")
+                audio_target = temp_extracted
+
+            try:
+                logger.info(f"Transcrevendo arquivo local ({video_url}) com Groq Whisper...")
+                transcript = whisper.transcribe(audio_target)
+                if not transcript or len(transcript.strip()) < 10:
+                    raise RuntimeError("A transcrição do arquivo local não produziu texto inteligível.")
+            finally:
+                if temp_extracted and os.path.exists(temp_extracted):
+                    try:
+                        os.remove(temp_extracted)
+                    except Exception:
+                        pass
+
+            metadata = {
+                "video_id": video_id,
+                "url": video_url,
+                "filename": os.path.basename(video_url),
+                "is_local_file": True,
+                "file_size_mb": round(os.path.getsize(video_url) / (1024 * 1024), 2),
+                "method": "local_media_whisper",
+                "length_chars": len(transcript),
+                "cache_hit": False,
+            }
+            VideoCache.set(video_id, transcript, metadata)
+            return ("captions", transcript, metadata)
 
         canonical_url = cls.get_canonical_youtube_url(video_id)
 
