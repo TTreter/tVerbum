@@ -33,6 +33,8 @@ from .models import (
     SaplFetchSessionRequest,
     AgendaExtractRequest,
     AgendaExtractResponse,
+    DetectSpeakersRequest,
+    DetectSpeakersResponse,
     VotedMatter,
 )
 from .ai_engine import MinuteGenerator
@@ -44,6 +46,7 @@ from .cache import VideoCache
 from .limiter import RateLimiter
 from .sapl_client import SaplClient
 from .agenda_parser import AgendaParser
+from .speaker_mapper import SpeakerMapper
 
 app = FastAPI(
     title="tVerbum API",
@@ -751,3 +754,24 @@ async def download_latest_minute(format: str):
     if not _LATEST_MINUTE_ID or _LATEST_MINUTE_ID not in _MINUTES_STORE:
         raise HTTPException(status_code=400, detail="Nenhuma ata foi gerada ainda nesta sessão.")
     return _export_minute_to_response(_MINUTES_STORE[_LATEST_MINUTE_ID], format)
+
+
+@app.post("/api/speakers/detect", response_model=DetectSpeakersResponse)
+async def detect_speakers_endpoint(payload: DetectSpeakersRequest):
+    """
+    Detecta concessões regimentais de fala na transcrição da sessão e apura
+    os tempos estimados de tribuna de cada orador.
+    """
+    cues = SpeakerMapper.extract_speaker_cues(
+        payload.transcript,
+        known_attendees=payload.known_attendees,
+    )
+    _, time_summary = SpeakerMapper.enhance_timeline(
+        timeline=[],
+        transcript_text=payload.transcript,
+        known_attendees=payload.known_attendees,
+    )
+    return DetectSpeakersResponse(
+        detected_cues=cues,
+        speaker_time_summary=time_summary,
+    )

@@ -32,6 +32,7 @@ from .presets import PresetManager
 from .cache import VideoCache
 from .name_library import NameLibraryManager
 from .providers import ProviderRouter, BaseLLMProvider
+from .speaker_mapper import SpeakerMapper
 
 load_dotenv()
 logger = logging.getLogger("tverbum.ai_engine")
@@ -152,7 +153,7 @@ Sua missão é analisar a sessão fornecida e retornar um objeto JSON estruturad
 1. 'body': O texto formal completo do corpo da ata (sem cabeçalho institucional e sem linhas de assinatura).
 2. 'extracted_data': Os dados estruturados da sessão para o banco de dados (data ISO YYYY-MM-DD, horários HH:MM, presidente, secretário, lista de presentes, ausentes e matérias votadas/lidas).
 3. 'review_warnings': De 1 a 5 pontos específicos do texto ('term' deve ser uma palavra ou trecho curto exato presente em 'body', 'timestamp' o minuto aproximado no vídeo e 'reason' o motivo) onde recomenda-se que o revisor humano confira um nome próprio específico, número de ofício/lei ou valor citado.
-4. 'timeline_map': Lista cronológica das fases da sessão e oradores com seus respectivos timestamps ('HH:MM:SS' ou 'MM:SS') para navegação sincronizada no vídeo.
+4. 'timeline_map': Lista cronológica das fases da sessão e oradores com seus respectivos timestamps ('HH:MM:SS' ou 'MM:SS'), nome do orador no campo 'speaker' e a fase/categoria em 'category' ('Pequeno Expediente', 'Explicações Pessoais', 'Leitura do Expediente', 'Ordem do Dia', etc.) para navegação sincronizada no vídeo.
 
 DIRETRIZES FUNDAMENTAIS DE REDAÇÃO DO CAMPO 'body':
 {paragraph_rule}
@@ -475,6 +476,20 @@ DIRETRIZES FUNDAMENTAIS DE REDAÇÃO DO CAMPO 'body':
 
         full_text = "\n".join(doc_parts)
         integrity_hash = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
+
+        # Refinamento e diarização heurística da Linha do Tempo e tempos de oradores
+        enhanced_timeline, speaker_times = SpeakerMapper.enhance_timeline(
+            timeline=ai_payload.timeline_map,
+            transcript_text=raw_transcript_text,
+            known_attendees=config.known_attendees,
+        )
+        ai_payload.timeline_map = enhanced_timeline
+        if not getattr(ai_payload.extracted_data, "speaker_time_summary", None):
+            ai_payload.extracted_data.speaker_time_summary = speaker_times
+        else:
+            for k, v in speaker_times.items():
+                if k not in ai_payload.extracted_data.speaker_time_summary:
+                    ai_payload.extracted_data.speaker_time_summary[k] = v
 
         meta.pop("auxiliary_captions", None)
         meta["word_count"] = len(processed_body.split())

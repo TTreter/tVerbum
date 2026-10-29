@@ -603,6 +603,12 @@ class TVerbumEditor extends HTMLElement {
       <ul style="margin:4px 0 0 16px;padding:0;">
         ${matters.map(m => `<li><strong>${this._escapeHtml(m.matter)}</strong>: ${this._escapeHtml(m.result || m.summary)}</li>`).join('') || '<li>Nenhuma matéria listada</li>'}
       </ul>
+      ${ext.speaker_time_summary && Object.keys(ext.speaker_time_summary).length > 0 ? `
+        <div style="margin-top:8px;"><strong>Tempos de Tribuna (Oradores):</strong></div>
+        <div style="margin:4px 0 0 0;display:flex;flex-wrap:wrap;gap:4px;">
+          ${Object.entries(ext.speaker_time_summary).map(([spk, tm]) => `<span style="background:#1e293b;border:1px solid #334155;padding:2px 6px;border-radius:4px;font-size:10.5px;color:#38bdf8;">🎙️ ${this._escapeHtml(spk)}: <strong>${this._escapeHtml(tm)}</strong></span>`).join('')}
+        </div>
+      ` : ''}
     `;
 
     // Timeline Panel
@@ -616,9 +622,13 @@ class TVerbumEditor extends HTMLElement {
         return `
           <div class="tl-item">
             <a href="${link}" target="_blank" class="tl-badge" title="Abrir vídeo neste minuto">[${this._escapeHtml(item.timestamp)}]</a>
-            <div>
-              <div style="font-weight:600;color:#e2e8f0;">${this._escapeHtml(item.phase)}</div>
-              <div style="color:#94a3b8;font-size:11px;">${this._escapeHtml(item.summary)}</div>
+            <div style="flex:1;">
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <span style="font-weight:600;color:#e2e8f0;">${this._escapeHtml(item.phase)}</span>
+                ${item.speaker ? `<span style="background:#0284c7;color:#fff;font-size:10px;padding:1px 5px;border-radius:4px;">🎙️ ${this._escapeHtml(item.speaker)}</span>` : ''}
+                ${item.category ? `<span style="background:#334155;color:#cbd5e1;font-size:10px;padding:1px 5px;border-radius:4px;">${this._escapeHtml(item.category)}</span>` : ''}
+              </div>
+              <div style="color:#94a3b8;font-size:11px;margin-top:2px;">${this._escapeHtml(item.summary)}</div>
             </div>
           </div>
         `;

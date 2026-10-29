@@ -88,6 +88,10 @@ class ExtractedSessionData(BaseModel):
     present_members: List[str] = Field(default_factory=list, description="Lista nominal dos vereadores/membros presentes")
     absent_members: List[str] = Field(default_factory=list, description="Lista nominal dos ausentes")
     voted_matters: List[VotedMatter] = Field(default_factory=list, description="Lista estruturada de matérias da Ordem do Dia")
+    speaker_time_summary: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Tempo de tribuna total apurado por orador (ex: {'Vereador Carlos': '08m 15s'})",
+    )
 
 
 class AIGeneratedPayload(BaseModel):
@@ -337,6 +341,20 @@ class UpdateMinuteRequest(BaseModel):
             "aprovada_definitiva",
         ]
     ] = Field(default=None, description="Novo status no ciclo de vida notarial")
+
+
+class DetectSpeakersRequest(BaseModel):
+    """Payload para detecção heurística de oradores a partir de ritos regimentais."""
+
+    transcript: str = Field(..., description="Transcrição completa ou trecho da sessão")
+    known_attendees: List[str] = Field(default_factory=list, description="Lista nominal de vereadores para ancoragem")
+
+
+class DetectSpeakersResponse(BaseModel):
+    """Resultado da detecção de oradores e tempos de tribuna."""
+
+    detected_cues: List[Dict[str, Any]] = Field(default_factory=list)
+    speaker_time_summary: Dict[str, str] = Field(default_factory=dict)
 
 
 class ValidateTextRequest(BaseModel):
