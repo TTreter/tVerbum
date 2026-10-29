@@ -385,3 +385,18 @@ class RefineSnippetResponse(BaseModel):
 
     original_snippet: str
     refined_snippet: str
+
+
+class GenerationJob(BaseModel):
+    """Representa uma tarefa de geração assíncrona em segundo plano com acompanhamento de progresso."""
+
+    job_id: str = Field(description="UUID único da tarefa")
+    status: Literal["queued", "downloading", "transcribing", "generating_ai", "normalizing", "completed", "failed"] = Field(
+        default="queued", description="Status da execução"
+    )
+    progress_percent: int = Field(default=0, ge=0, le=100, description="Progresso percentual de 0 a 100")
+    current_step: str = Field(default="Na fila de processamento...", description="Descrição legível da etapa atual")
+    result: Optional[MinuteOutput] = Field(default=None, description="Ata gerada após conclusão")
+    error_message: Optional[str] = Field(default=None, description="Mensagem de erro caso o job falhe")
+    created_at: float = Field(default=0.0)
+    updated_at: float = Field(default=0.0)

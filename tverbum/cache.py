@@ -54,6 +54,31 @@ class VideoCache:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_store (
+                minute_id TEXT PRIMARY KEY,
+                created_at REAL,
+                output_json TEXT,
+                config_json TEXT,
+                updated_at REAL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS job_store (
+                job_id TEXT PRIMARY KEY,
+                created_at REAL,
+                status TEXT,
+                progress_percent INTEGER,
+                step_description TEXT,
+                result_json TEXT,
+                error_message TEXT,
+                updated_at REAL
+            )
+            """
+        )
         return conn
 
     @classmethod
@@ -164,12 +189,128 @@ class VideoCache:
             pass
 
     @classmethod
+    def save_session(cls, minute_id: str, output_data: Dict[str, Any], config_data: Optional[Dict[str, Any]] = None) -> None:
+        """Salva a ata completa no armazenamento persistente SQLite para consulta por ID."""
+        try:
+            now = time.time()
+            with cls._get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO session_store (minute_id, created_at, output_json, config_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        minute_id,
+                        now,
+                        json.dumps(output_data, ensure_ascii=False),
+                        json.dumps(config_data, ensure_ascii=False) if config_data else None,
+                        now,
+                    ),
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    @classmethod
+    def get_session(cls, minute_id: str) -> Optional[Dict[str, Any]]:
+        """Recupera a ata persistida no banco SQLite pelo seu minute_id."""
+        try:
+            with cls._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT output_json FROM session_store WHERE minute_id = ?",
+                    (minute_id,),
+                ).fetchone()
+                if row and row[0]:
+                    return json.loads(row[0])
+        except Exception:
+            return None
+        return None
+
+    @classmethod
+    def get_latest_session(cls) -> Optional[Dict[str, Any]]:
+        """Recupera a ata persistida mais recente salva no banco SQLite."""
+        try:
+            with cls._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT output_json FROM session_store ORDER BY updated_at DESC LIMIT 1"
+                ).fetchone()
+                if row and row[0]:
+                    return json.loads(row[0])
+        except Exception:
+            return None
+        return None
+
+    @classmethod
+    def save_job(
+        cls,
+        job_id: str,
+        status: str,
+        progress_percent: int,
+        step_description: str,
+        result_data: Optional[Dict[str, Any]] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Registra ou atualiza o estado de uma tarefa assíncrona de geração no SQLite."""
+        try:
+            now = time.time()
+            with cls._get_conn() as conn:
+                existing = conn.execute("SELECT created_at FROM job_store WHERE job_id = ?", (job_id,)).fetchone()
+                created_at = existing[0] if existing else now
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO job_store (job_id, created_at, status, progress_percent, step_description, result_json, error_message, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        created_at,
+                        status,
+                        progress_percent,
+                        step_description,
+                        json.dumps(result_data, ensure_ascii=False) if result_data else None,
+                        error_message,
+                        now,
+                    ),
+                )
+                conn.commit()
+        except Exception:
+            pass
+
+    @classmethod
+    def get_job(cls, job_id: str) -> Optional[Dict[str, Any]]:
+        """Recupera o estado de uma tarefa assíncrona salva no SQLite."""
+        try:
+            with cls._get_conn() as conn:
+                row = conn.execute(
+                    "SELECT job_id, created_at, status, progress_percent, step_description, result_json, error_message, updated_at FROM job_store WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                jid, cat, st, prg, step, res_j, err, uat = row
+                return {
+                    "job_id": jid,
+                    "created_at": cat,
+                    "status": st,
+                    "progress_percent": prg,
+                    "step_description": step,
+                    "result": json.loads(res_j) if res_j else None,
+                    "error_message": err,
+                    "updated_at": uat,
+                }
+        except Exception:
+            return None
+        return None
+
+    @classmethod
     def clear(cls) -> None:
-        """Limpa todo o cache de vídeos e atas."""
+        """Limpa todo o cache de vídeos, atas e jobs."""
         try:
             with cls._get_conn() as conn:
                 conn.execute("DELETE FROM video_cache")
                 conn.execute("DELETE FROM minute_cache")
+                conn.execute("DELETE FROM session_store")
+                conn.execute("DELETE FROM job_store")
                 conn.commit()
         except Exception:
             pass

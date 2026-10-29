@@ -299,11 +299,15 @@
         </div>
       </div>
 
-      <!-- Loading Overlay -->
-      <div id="loading_overlay" class="hidden absolute inset-0 bg-slate-900/80 backdrop-blur-sm z-30 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
+      <!-- Loading Overlay with Real-Time Progress -->
+      <div id="loading_overlay" class="hidden absolute inset-0 bg-slate-900/90 backdrop-blur-sm z-30 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
         <div class="w-16 h-16 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin mb-4"></div>
-        <h3 class="text-base font-semibold text-white">Analisando Sessão e Extraindo JSON Estruturado...</h3>
-        <p class="text-xs text-slate-300 mt-1 max-w-sm">O tVerbum está redigindo o corpo da ata, identificando presenças/votações para o banco de dados e mapeando os timestamps do vídeo.</p>
+        <h3 id="loading_title" class="text-base font-semibold text-white">Processando Sessão Plenária...</h3>
+        <p id="loading_step" class="text-xs text-amber-300 mt-1 max-w-sm">Iniciando processamento em segundo plano...</p>
+        <div class="w-full max-w-md bg-slate-800 rounded-full h-2.5 mt-4 overflow-hidden border border-slate-700">
+          <div id="loading_progress_bar" class="bg-gradient-to-r from-amber-500 to-emerald-500 h-2.5 rounded-full transition-all duration-300" style="width: 5%"></div>
+        </div>
+        <span id="loading_percent" class="text-[11px] text-slate-400 mt-1 font-mono">5%</span>
       </div>
 
       <!-- Standalone Reusable Web Component -->
@@ -696,11 +700,15 @@ const ata = await res.json();
       btn.disabled = true;
       document.getElementById('btn_label').innerText = 'Processando com IA...';
       document.getElementById('loading_overlay').classList.remove('hidden');
+      document.getElementById('loading_progress_bar').style.width = '10%';
+      document.getElementById('loading_percent').innerText = '10%';
+      document.getElementById('loading_step').innerText = 'Iniciando tarefa assíncrona...';
       document.getElementById('badge_status').innerText = 'Processando...';
       document.getElementById('badge_status').className = 'text-xs px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-medium animate-pulse';
 
       try {
-        const response = await fetch('/api/generate', {
+        // 1. Dispara geração assíncrona
+        const response = await fetch('/api/generate-async', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -708,10 +716,52 @@ const ata = await res.json();
 
         if (!response.ok) {
           const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.detail || `Erro ${response.status} na geração da ata.`);
+          throw new Error(errData.detail || `Erro ${response.status} ao iniciar tarefa.`);
         }
 
-        const data = await response.json();
+        const job = await response.json();
+        const jobId = job.job_id;
+
+        // 2. Conecta ao fluxo SSE para acompanhamento com barra de progresso em tempo real
+        const data = await new Promise((resolve, reject) => {
+          const eventSource = new EventSource('/api/jobs/' + jobId + '/stream');
+
+          eventSource.onmessage = (event) => {
+            try {
+              const msg = JSON.parse(event.data);
+              const prg = msg.progress_percent || 0;
+              document.getElementById('loading_progress_bar').style.width = prg + '%';
+              document.getElementById('loading_percent').innerText = prg + '%';
+              if (msg.step_description) {
+                document.getElementById('loading_step').innerText = msg.step_description;
+              }
+
+              if (msg.status === 'completed' && msg.result) {
+                eventSource.close();
+                resolve(msg.result);
+              } else if (msg.status === 'failed') {
+                eventSource.close();
+                reject(new Error(msg.error_message || 'Falha no processamento da sessão.'));
+              }
+            } catch (e) {
+              eventSource.close();
+              reject(e);
+            }
+          };
+
+          eventSource.onerror = () => {
+            eventSource.close();
+            // Se o SSE falhar temporariamente, tenta consultar o endpoint tradicional /api/jobs/{id}
+            fetch('/api/jobs/' + jobId)
+              .then(r => r.json())
+              .then(j => {
+                if (j.status === 'completed' && j.result) resolve(j.result);
+                else reject(new Error('Conexão com a tarefa em segundo plano foi encerrada.'));
+              })
+              .catch(() => reject(new Error('Conexão com a tarefa foi perdida.')));
+          };
+        });
+
         editorEl.setMinute(data);
 
         // Exibe o UUID da sessão para integração com tNuntia

@@ -4,12 +4,15 @@ Inclui endpoints de validação pós-edição, reescrita de trecho com IA e entr
 """
 
 import uuid
+import json
+import asyncio
 import tempfile
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse, Response
+from fastapi.responses import HTMLResponse, FileResponse, Response, StreamingResponse
 
 from .models import (
     MinuteConfig,
@@ -22,6 +25,7 @@ from .models import (
     ValidateTextResponse,
     RefineSnippetRequest,
     RefineSnippetResponse,
+    GenerationJob,
 )
 from .ai_engine import MinuteGenerator
 from .normalizer import TextNormalizer
@@ -258,11 +262,22 @@ async def get_video_transcription(video_id: str):
 @app.get("/api/session/{minute_id}", response_model=MinuteOutput)
 async def get_session_by_id(minute_id: str):
     """
-    Devolve o objeto MinuteOutput armazenado em memória no dicionário _MINUTES_STORE[minute_id],
+    Devolve o objeto MinuteOutput salvo no banco de dados SQLite persistente (ou em cache de memória),
     permitindo que sistemas externos (como tNuntia) consultem atas geradas anteriormente sem reprocessar.
     Aceita 'latest' para obter a última sessão gerada.
     """
     target_id = _LATEST_MINUTE_ID if minute_id == "latest" else minute_id
+
+    # 1. Consulta armazenamento persistente SQLite
+    if minute_id == "latest":
+        db_minute = VideoCache.get_latest_session()
+    else:
+        db_minute = VideoCache.get_session(target_id) if target_id else None
+
+    if db_minute:
+        return MinuteOutput(**db_minute)
+
+    # 2. Fallback para memória em tempo de execução
     minute = _MINUTES_STORE.get(target_id) if target_id else None
     if not minute:
         raise HTTPException(status_code=404, detail="Sessão/Ata não encontrada para o minute_id informado.")
@@ -327,11 +342,164 @@ async def generate_minute_endpoint(config: MinuteConfig):
         _MINUTES_STORE[output.id] = output
         _LATEST_MINUTE_ID = output.id
 
-        # 3. Salva no cache SQLite para consultas futuras
+        # 3. Salva no cache SQLite e persistência relacional de sessões
         VideoCache.set_minute(cache_key, output.model_dump())
+        VideoCache.save_session(output.id, output.model_dump(), config.model_dump())
         return output
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _run_async_generation_task(job_id: str, config: MinuteConfig):
+    """Executa a geração em background e atualiza o progresso em tempo real no SQLite."""
+    global _LATEST_MINUTE_ID
+    try:
+        VideoCache.save_job(
+            job_id,
+            status="downloading",
+            progress_percent=15,
+            step_description="Localizando mídia da sessão e verificando legendas/áudio...",
+        )
+
+        # 1. Checa cache
+        cache_key = VideoCache.build_config_cache_key(config)
+        if not config.bypass_cache:
+            cached_minute_dict = VideoCache.get_minute(cache_key)
+            if cached_minute_dict:
+                cached_minute = MinuteOutput(**cached_minute_dict)
+                cached_minute.metadata["cache_hit"] = True
+                _MINUTES_STORE[cached_minute.id] = cached_minute
+                _LATEST_MINUTE_ID = cached_minute.id
+                VideoCache.save_session(cached_minute.id, cached_minute.model_dump(), config.model_dump())
+                VideoCache.save_job(
+                    job_id,
+                    status="completed",
+                    progress_percent=100,
+                    step_description="Ata recuperada instantaneamente do cache local SQLite.",
+                    result_data=cached_minute.model_dump(),
+                )
+                return
+
+        VideoCache.save_job(
+            job_id,
+            status="transcribing",
+            progress_percent=40,
+            step_description="Transcrevendo falas e cronometragens com Groq Whisper...",
+        )
+
+        generator = MinuteGenerator(provider=config.ai_provider)
+
+        VideoCache.save_job(
+            job_id,
+            status="generating_ai",
+            progress_percent=70,
+            step_description="Redigindo texto formal da ata com IA e estruturando dados...",
+        )
+
+        output = RateLimiter.execute_with_backoff(
+            func=lambda: generator.generate(config),
+            provider=config.ai_provider or "auto",
+        )
+
+        VideoCache.save_job(
+            job_id,
+            status="normalizing",
+            progress_percent=90,
+            step_description="Aplicando normalizador determinístico e biblioteca fonética de nomes...",
+        )
+
+        _MINUTES_STORE[output.id] = output
+        _LATEST_MINUTE_ID = output.id
+        VideoCache.set_minute(cache_key, output.model_dump())
+        VideoCache.save_session(output.id, output.model_dump(), config.model_dump())
+
+        VideoCache.save_job(
+            job_id,
+            status="completed",
+            progress_percent=100,
+            step_description="Ata gerada com sucesso e pronta para revisão oficial.",
+            result_data=output.model_dump(),
+        )
+    except Exception as e:
+        logger.error(f"Erro ao processar job {job_id}: {e}", exc_info=True)
+        VideoCache.save_job(
+            job_id,
+            status="failed",
+            progress_percent=100,
+            step_description="Falha durante o processamento da sessão.",
+            error_message=str(e),
+        )
+
+
+@app.post("/api/generate-async", response_model=GenerationJob)
+async def generate_minute_async_endpoint(config: MinuteConfig, background_tasks: BackgroundTasks):
+    """
+    Inicia a geração da ata em segundo plano (Background Task) sem risco de timeout HTTP 504.
+    Retorna imediatamente o `job_id` para acompanhamento de status via `/api/jobs/{job_id}/stream`.
+    """
+    job_id = f"job_{uuid.uuid4().hex[:12]}"
+    VideoCache.save_job(
+        job_id,
+        status="queued",
+        progress_percent=0,
+        step_description="Tarefa agendada na fila de processamento...",
+    )
+    background_tasks.add_task(_run_async_generation_task, job_id, config)
+    job_data = VideoCache.get_job(job_id)
+    return GenerationJob(**job_data)
+
+
+@app.get("/api/jobs/{job_id}", response_model=GenerationJob)
+async def get_job_status(job_id: str):
+    """Retorna o status atual, percentual de progresso e resultado de uma tarefa assíncrona."""
+    job_data = VideoCache.get_job(job_id)
+    if not job_data:
+        raise HTTPException(status_code=404, detail="Tarefa não encontrada para o job_id informado.")
+    return GenerationJob(**job_data)
+
+
+@app.get("/api/jobs/{job_id}/stream")
+async def stream_job_progress(job_id: str):
+    """
+    Endpoint SSE (Server-Sent Events) para transmissão do progresso em tempo real
+    para a interface web ou sistemas externos via `EventSource`.
+    """
+    async def event_generator():
+        last_progress = -1
+        last_step = ""
+        while True:
+            job = VideoCache.get_job(job_id)
+            if not job:
+                yield f"event: error\ndata: {json.dumps({'error': 'Job não encontrado'})}\n\n"
+                break
+
+            if job["progress_percent"] != last_progress or job["step_description"] != last_step:
+                last_progress = job["progress_percent"]
+                last_step = job["step_description"]
+                payload = {
+                    "job_id": job["job_id"],
+                    "status": job["status"],
+                    "progress_percent": job["progress_percent"],
+                    "step_description": job["step_description"],
+                    "result": job.get("result"),
+                    "error_message": job.get("error_message"),
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            if job["status"] in ("completed", "failed"):
+                break
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/validate-text", response_model=ValidateTextResponse)
